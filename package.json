@@ -13,6 +13,7 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "firebase-admin": "^13.6.0",
     "googleapis": "^166.0.0",
     "telegraf": "^4.16.3"
   }
