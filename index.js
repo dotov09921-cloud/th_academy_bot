@@ -4,36 +4,33 @@ const express = require('express');
 const { google } = require('googleapis');
 
 // ===================================================================
-// ===  БАЗОВЫЕ ПЕРЕМЕННЫЕ  ==========================================
+// ===  БАЗОВЫЕ ПЕРЕМЕННЫЕ ============================================
 // ===================================================================
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
-// JSON сервисного аккаунта — берём из GOOGLE_CREDENTIALS или GOOGLE_SERVICE_ACCOUNT
-const rawGoogleCreds =
-  process.env.GOOGLE_CREDENTIALS || process.env.GOOGLE_SERVICE_ACCOUNT || null;
-
+// ---- ТОЛЬКО ЭТА ПЕРЕМЕННАЯ ----
 let GOOGLE_CREDENTIALS = null;
-if (rawGoogleCreds) {
-  try {
-    GOOGLE_CREDENTIALS = JSON.parse(rawGoogleCreds);
-  } catch (e) {
-    console.error('❌ Ошибка парсинга GOOGLE_CREDENTIALS:', e.message);
-  }
+
+try {
+  GOOGLE_CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+} catch (e) {
+  console.error("❌ Ошибка парсинга GOOGLE_CREDENTIALS:", e.message);
 }
 
-// ID Google таблицы
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-if (!BOT_TOKEN) throw new Error('Не указан BOT_TOKEN в переменных окружения');
+// ===================================================================
+if (!BOT_TOKEN) throw new Error("Не указан BOT_TOKEN");
 
+// Инициализация Telegram
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
 // ===================================================================
-// ===  GOOGLE SHEETS: ИНИЦИАЛИЗАЦИЯ  ================================
+// === GOOGLE SHEETS: ИНИЦИАЛИЗАЦИЯ =================================
 // ===================================================================
 
 let sheets = null;
@@ -44,77 +41,69 @@ if (GOOGLE_CREDENTIALS && SPREADSHEET_ID) {
       GOOGLE_CREDENTIALS.client_email,
       null,
       GOOGLE_CREDENTIALS.private_key,
-      ['https://www.googleapis.com/auth/spreadsheets']
+      ["https://www.googleapis.com/auth/spreadsheets"]
     );
 
-    sheets = google.sheets({ version: 'v4', auth });
-    console.log('✅ Google Sheets подключен');
+    sheets = google.sheets({ version: "v4", auth });
+
+    console.log("✅ Google Sheets подключен");
   } catch (err) {
-    console.error('❌ Ошибка инициализации Google Sheets:', err.message);
+    console.error("❌ Ошибка инициализации Google Sheets:", err.message);
   }
 } else {
-  console.warn('⚠ Нет GOOGLE_CREDENTIALS или SPREADSHEET_ID — логирование отключено');
+  console.warn("⚠ GOOGLE_CREDENTIALS или SPREADSHEET_ID отсутствует!");
 }
 
-// -------------------------------------------------------------------
-// === ЛОГИ В GOOGLE SHEETS ==========================================
-// -------------------------------------------------------------------
+// ===================================================================
+// === ФУНКЦИИ ЛОГГИРОВАНИЯ ==========================================
+// ===================================================================
 
 // USERS: user_id | name | username | created_at
 async function logRegistrationToSheets(userId, name, username) {
   if (!sheets) return;
-  const now = new Date().toISOString();
-
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'USERS!A:D',
-      valueInputOption: 'USER_ENTERED',
+      range: "USERS!A:D",
+      valueInputOption: "USER_ENTERED",
       requestBody: {
-        values: [[String(userId), name, username || '', now]],
+        values: [[String(userId), name, username || "", new Date().toISOString()]],
       },
     });
-    console.log(`📝 USERS добавлен → ${userId} | ${name}`);
-  } catch (err) {
-    console.error('Ошибка записи USERS:', err.message);
+  } catch (e) {
+    console.error("Ошибка записи USERS:", e.message);
   }
 }
 
-// PROGRESS: user_id | name | lesson | result | points | last_at | next_at
-async function logProgressToSheets(userId, userState, result) {
+// PROGRESS
+async function logProgressToSheets(userId, u, result) {
   if (!sheets) return;
-
-  const now = new Date().toISOString();
-  const nextAt = userState.nextLessonAt
-    ? new Date(userState.nextLessonAt).toISOString()
-    : '';
 
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'PROGRESS!A:G',
-      valueInputOption: 'USER_ENTERED',
+      range: "PROGRESS!A:G",
+      valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[
           String(userId),
-          userState.name,
-          userState.currentLesson,
+          u.name,
+          u.currentLesson,
           result,
-          userState.points,
-          now,
-          nextAt,
-        ]],
+          u.points,
+          new Date().toISOString(),
+          u.nextLessonAt ? new Date(u.nextLessonAt).toISOString() : ""
+        ]]
       },
     });
-    console.log(`📝 PROGRESS → ${userId} | lesson ${userState.currentLesson} | ${result}`);
-  } catch (err) {
-    console.error('Ошибка записи PROGRESS:', err.message);
+  } catch (e) {
+    console.error("Ошибка записи PROGRESS:", e.message);
   }
 }
 
-// -------------------------------------------------------------------
-// === БАЗА ДАННЫХ В ЛИСТЕ DB ========================================
-// -------------------------------------------------------------------
+// ===================================================================
+// === DB (храним прогресс) ===========================================
+// ===================================================================
 
 async function loadUserFromDB(userId) {
   if (!sheets) return null;
@@ -122,23 +111,24 @@ async function loadUserFromDB(userId) {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'DB!A2:G9999',
+      range: "DB!A2:G9999",
     });
 
     const rows = res.data.values || [];
     const row = rows.find(r => r[0] === String(userId));
+
     if (!row) return null;
 
     return {
       name: row[1],
-      currentLesson: Number(row[2]) || 1,
-      points: Number(row[3]) || 0,
-      nextLessonAt: Number(row[4]) || 0,
-      lastLessonAt: Number(row[5]) || 0,
-      waitingAnswer: row[6] === 'true',
+      currentLesson: Number(row[2]),
+      points: Number(row[3]),
+      nextLessonAt: Number(row[4]),
+      lastLessonAt: Number(row[5]),
+      waitingAnswer: row[6] === "true",
     };
-  } catch (err) {
-    console.error('Ошибка DB load:', err.message);
+  } catch (e) {
+    console.error("Ошибка DB load:", e.message);
     return null;
   }
 }
@@ -151,163 +141,139 @@ async function saveUserToDB(userId) {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'DB!A2:A9999',
+      range: "DB!A2:A9999",
     });
 
     const rows = res.data.values || [];
-    const rowIndex = rows.findIndex(r => r[0] === String(userId));
+    const index = rows.findIndex(r => r[0] === String(userId));
 
     const values = [
       String(userId),
       u.name,
-      String(u.currentLesson),
-      String(u.points),
-      String(u.nextLessonAt),
-      String(u.lastLessonAt),
-      u.waitingAnswer ? 'true' : 'false',
+      u.currentLesson,
+      u.points,
+      u.nextLessonAt,
+      u.lastLessonAt,
+      u.waitingAnswer ? "true" : "false",
     ];
 
-    if (rowIndex === -1) {
+    if (index === -1) {
       await sheets.spreadsheets.values.append({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'DB!A:G',
-        valueInputOption: 'USER_ENTERED',
+        range: "DB!A:G",
+        valueInputOption: "USER_ENTERED",
         requestBody: { values: [values] },
       });
     } else {
-      const range = `DB!A${rowIndex + 2}:G${rowIndex + 2}`;
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range,
-        valueInputOption: 'USER_ENTERED',
+        range: `DB!A${index + 2}:G${index + 2}`,
+        valueInputOption: "USER_ENTERED",
         requestBody: { values: [values] },
       });
     }
-
-    console.log(`💾 DB сохранён: ${userId}`);
-  } catch (err) {
-    console.error('Ошибка DB save:', err.message);
+  } catch (e) {
+    console.error("Ошибка DB save:", e.message);
   }
 }
 
 // ===================================================================
-// === ЛОГИКА ОБУЧЕНИЯ ===============================================
+// === ЛОГИКА ОБУЧЕНИЯ =================================================
 // ===================================================================
 
 const tempUsers = {};
 const users = {};
 
 const lessons = {
-  1: { text: 'Урок 1: Что такое ЛКМ?\n\nОтвет: "лак"', answer: 'лак' },
-  2: { text: 'Урок 2: Что такое грунт?\n\nОтвет: "грунт"', answer: 'грунт' },
+  1: { text: 'Урок 1: Что такое ЛКМ?\nОтвет: "лак"', answer: "лак" },
+  2: { text: 'Урок 2: Что такое грунт?\nОтвет: "грунт"', answer: "грунт" },
 };
 
 // /start
 bot.start(async ctx => {
-  const userId = ctx.from.id;
+  const id = ctx.from.id;
 
-  const saved = await loadUserFromDB(userId);
+  const saved = await loadUserFromDB(id);
   if (saved) {
-    users[userId] = saved;
-    await ctx.reply(`С возвращением, ${saved.name}!`);
-    return;
+    users[id] = saved;
+    return ctx.reply(`С возвращением, ${saved.name}!`);
   }
 
-  tempUsers[userId] = { step: 'ask_name' };
-  await ctx.reply('Привет! Напиши своё имя:');
+  tempUsers[id] = { step: "ask_name" };
+  return ctx.reply("Привет! Напиши своё имя:");
 });
 
-// ОТВЕТЫ
-bot.on('text', async ctx => {
-  const userId = ctx.from.id;
+// обработка текстов
+bot.on("text", async ctx => {
+  const id = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // регистрация
-  if (tempUsers[userId]?.step === 'ask_name') {
-    users[userId] = {
+  if (tempUsers[id]?.step === "ask_name") {
+    users[id] = {
       name: text,
       currentLesson: 1,
+      points: 0,
       waitingAnswer: false,
       nextLessonAt: 0,
       lastLessonAt: 0,
-      points: 0,
     };
 
-    await logRegistrationToSheets(userId, text, ctx.from.username);
-    await saveUserToDB(userId);
+    await logRegistrationToSheets(id, text, ctx.from.username);
+    await saveUserToDB(id);
 
-    delete tempUsers[userId];
+    delete tempUsers[id];
 
-    await ctx.reply(`Отлично, ${text}! Начинаем обучение.`);
     return sendLesson(ctx, 1);
   }
 
-  if (!users[userId]) return;
-  const u = users[userId];
+  if (!users[id] || !users[id].waitingAnswer) return;
 
-  if (!u.waitingAnswer) return;
-
+  const u = users[id];
   const lesson = lessons[u.currentLesson];
-  if (!lesson) return ctx.reply('Все уроки завершены 🎉');
 
-  const correct = lesson.answer.toLowerCase();
-  const userAnswer = text.toLowerCase();
-
-  if (correct === userAnswer) {
+  if (text.toLowerCase() === lesson.answer.toLowerCase()) {
     u.points++;
     u.waitingAnswer = false;
     u.currentLesson++;
     u.nextLessonAt = Date.now() + 24 * 3600 * 1000;
 
-    await ctx.reply('✅ Правильно! Следующий урок через 24 часа.');
-    await logProgressToSheets(userId, u, 'OK');
-    return saveUserToDB(userId);
-  } else {
-    u.waitingAnswer = false;
-    u.nextLessonAt = Date.now() + 30 * 60 * 1000;
-
-    await ctx.reply('❌ Неправильно. Повтор урока через 30 минут.');
-    await logProgressToSheets(userId, u, 'FAIL');
-    return saveUserToDB(userId);
+    await ctx.reply("✅ Верно! Следующий урок через 24 часа.");
+    await logProgressToSheets(id, u, "OK");
+    return saveUserToDB(id);
   }
+
+  u.waitingAnswer = false;
+  u.nextLessonAt = Date.now() + 30 * 60 * 1000;
+
+  await ctx.reply("❌ Неправильно. Повтор через 30 минут.");
+  await logProgressToSheets(id, u, "FAIL");
+  return saveUserToDB(id);
 });
 
-// отправка урока
 async function sendLesson(ctx, num) {
-  const userId = ctx.from.id;
-  const lesson = lessons[num];
+  const id = ctx.from.id;
 
-  if (!lesson) return ctx.reply('Уроки закончились.');
+  users[id].waitingAnswer = true;
+  users[id].lastLessonAt = Date.now();
 
-  users[userId].waitingAnswer = true;
-  users[userId].lastLessonAt = Date.now();
+  await ctx.reply(`Урок ${num}\n\n${lessons[num].text}\n\nНапиши ответ:`);
 
-  await ctx.reply(`Урок ${num}\n\n${lesson.text}\n\nНапиши ответ:`);
-  await saveUserToDB(userId);
+  return saveUserToDB(id);
 }
-
-// тест команда
-bot.hears('тест', ctx => ctx.reply('Бот работает 💪'));
 
 // ===================================================================
 // === WEBHOOK ========================================================
 // ===================================================================
 
 if (WEBHOOK_URL) {
-  const path = '/telegram-webhook';
-
   bot.telegram.setWebhook(WEBHOOK_URL);
-  app.use(bot.webhookCallback(path));
+  app.use(bot.webhookCallback("/telegram-webhook"));
 
-  app.get('/', (req, res) => res.send('Bot is running'));
-
-  app.listen(PORT, () => {
-    console.log(`Server started on port ${PORT}`);
-  });
+  app.listen(PORT, () => console.log("Server started:", PORT));
 } else {
   bot.launch();
-  console.log('WEBHOOK_URL нет — запускаем polling');
 }
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// graceful stop
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
