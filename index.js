@@ -107,13 +107,96 @@ async function logProgressToSheets(userId, userState, result) {
 }
 
 // ===================================================================
+// ===  БАЗА ДАННЫХ (Google Sheets → лист DB) ========================
+// ===================================================================
+// Заголовки в DB: user_id | name | currentLesson | points | nextLessonAt | lastLessonAt | waitingAnswer
+
+async function loadUserFromDB(userId) {
+  if (!sheets || !SPREADSHEET_ID) return null;
+
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'DB!A2:G9999',
+    });
+
+    const rows = res.data.values || [];
+    const userRow = rows.find((r) => r[0] === String(userId));
+
+    if (!userRow) return null;
+
+    return {
+      name: userRow[1],
+      currentLesson: Number(userRow[2]) || 1,
+      points: Number(userRow[3]) || 0,
+      nextLessonAt: Number(userRow[4]) || 0,
+      lastLessonAt: Number(userRow[5]) || 0,
+      waitingAnswer: userRow[6] === 'true',
+    };
+  } catch (err) {
+    console.error('Ошибка загрузки из DB:', err.message);
+    return null;
+  }
+}
+
+async function saveUserToDB(userId) {
+  if (!sheets || !SPREADSHEET_ID) return;
+  if (!users[userId]) return;
+
+  const u = users[userId];
+
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'DB!A2:A9999',
+    });
+
+    const rows = res.data.values || [];
+    const rowIndex = rows.findIndex((r) => r[0] === String(userId));
+
+    const values = [
+      String(userId),
+      u.name,
+      String(u.currentLesson),
+      String(u.points),
+      String(u.nextLessonAt),
+      String(u.lastLessonAt),
+      u.waitingAnswer ? 'true' : 'false',
+    ];
+
+    if (rowIndex === -1) {
+      // новая строка
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'DB!A:G',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [values] },
+      });
+    } else {
+      // обновление существующей строки
+      const targetRange = `DB!A${rowIndex + 2}:G${rowIndex + 2}`;
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: targetRange,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [values] },
+      });
+    }
+
+    console.log(`💾 DB сохранён: user ${userId}`);
+  } catch (err) {
+    console.error('Ошибка сохранения DB:', err.message);
+  }
+}
+
+// ===================================================================
 // ===  ЭТАП 2. РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ  ============================
 // ===================================================================
 
 // Временное хранилище для регистрации (позже заменим на БД/Google Sheets)
 const tempUsers = {};
 
-// Основное хранилище прогресса (сейчас в памяти, табличка — как лог)
+// Основное хранилище прогресса (сейчас в памяти, DB-лист — постоянное хранилище)
 const users = {};
 
 // Уроки (позже сюда будет 90 уроков)
@@ -128,13 +211,21 @@ const lessons = {
   },
 };
 
-// ===== /start → начало регистрации =====
+// ===== /start → проверка в DB + регистрация =====
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
 
-  // ставим пользователя в режим регистрации
-  tempUsers[userId] = { step: 'ask_name' };
+  // 1) пробуем загрузить из DB
+  const saved = await loadUserFromDB(userId);
 
+  if (saved) {
+    users[userId] = saved;
+    await ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение.`);
+    return;
+  }
+
+  // 2) если в DB нет — запускаем регистрацию
+  tempUsers[userId] = { step: 'ask_name' };
   await ctx.reply('Привет! Введи своё имя для регистрации:');
 });
 
@@ -154,7 +245,7 @@ bot.on('text', async (ctx) => {
 
     console.log(`Регистрация → ${userId} | Имя: ${name}`);
 
-    // создаём запись прогресса в памяти
+    // создаём запись прогресса
     users[userId] = {
       name,
       currentLesson: 1,
@@ -164,8 +255,9 @@ bot.on('text', async (ctx) => {
       points: 0,
     };
 
-    // лог в Google Sheets (USERS)
+    // лог в USERS и сохранение в DB
     await logRegistrationToSheets(userId, name, username);
+    await saveUserToDB(userId);
 
     // выходим из режима регистрации
     delete tempUsers[userId];
@@ -193,6 +285,7 @@ bot.on('text', async (ctx) => {
   if (!lesson) {
     await ctx.reply('Все доступные уроки уже пройдены 🎉');
     userState.waitingAnswer = false;
+    await saveUserToDB(userId);
     return;
   }
 
@@ -214,10 +307,11 @@ bot.on('text', async (ctx) => {
       `USER ${userId} (${userState.name}) | lesson ${currentLesson} OK | points=${userState.points}`,
     );
 
-    // лог в PROGRESS
+    // лог в PROGRESS + сохранение в DB
     await logProgressToSheets(userId, userState, 'OK');
+    await saveUserToDB(userId);
 
-    // здесь позже добавим реальную отправку по таймеру
+    // тут позже добавим реальную отправку по таймеру
     return;
   }
 
@@ -231,8 +325,9 @@ bot.on('text', async (ctx) => {
     `USER ${userId} (${userState.name}) | lesson ${currentLesson} FAIL | points=${userState.points}`,
   );
 
-  // лог в PROGRESS
+  // лог в PROGRESS + сохранение в DB
   await logProgressToSheets(userId, userState, 'FAIL');
+  await saveUserToDB(userId);
 });
 
 // -------------------------------------------------------------------
@@ -261,6 +356,8 @@ async function sendLesson(ctx, lessonNumber) {
   console.log(
     `SEND LESSON ${lessonNumber} → user ${userId} (${users[userId].name})`,
   );
+
+  await saveUserToDB(userId);
 }
 
 // ===================================================================
