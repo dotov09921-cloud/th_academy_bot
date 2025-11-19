@@ -45,6 +45,19 @@ if (WEBHOOK_URL) {
   bot.launch();
 }
 
-// Чтобы бот аккуратно завершался
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Start server
+app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+    console.log(`Webhook URL: ${WEBHOOK_URL}`);
+});
+
+// Graceful shutdown
+process.once('SIGINT', () => {
+    console.log('SIGINT received → shutting down cleanly');
+    process.exit(0);
+});
+
+process.once('SIGTERM', () => {
+    console.log('SIGTERM received → shutting down cleanly');
+    process.exit(0);
+});
