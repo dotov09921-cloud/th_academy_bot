@@ -1,23 +1,18 @@
 require('dotenv').config();
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
+const lessons = require('./lessons');
 
-// ===================================================================
-// ===  FIREBASE ИНИЦИАЛИЗАЦИЯ =======================================
-// ===================================================================
+
+// ======================================================
+// FIREBASE
+// ======================================================
 
 let firebaseConfig = process.env.FIREBASE_CREDENTIALS;
+if (!firebaseConfig) throw new Error("FIREBASE_CREDENTIALS отсутствует");
 
-if (!firebaseConfig) {
-  throw new Error("Нет FIREBASE_CREDENTIALS в переменных окружения");
-}
-
-try {
-  firebaseConfig = JSON.parse(firebaseConfig);
-} catch (e) {
-  console.error("❌ Ошибка парсинга FIREBASE_CREDENTIALS:", e.message);
-}
+firebaseConfig = JSON.parse(firebaseConfig);
 
 admin.initializeApp({
   credential: admin.credential.cert(firebaseConfig),
@@ -26,22 +21,48 @@ admin.initializeApp({
 const db = admin.firestore();
 console.log("🔥 Firestore подключен");
 
-// ===================================================================
-// ===  БАЗОВЫЕ ПЕРЕМЕННЫЕ ===========================================
-// ===================================================================
+// ======================================================
+// ОСНОВНЫЕ НАСТРОЙКИ
+// ======================================================
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
-if (!BOT_TOKEN) throw new Error("Нет BOT_TOKEN в Environment");
+if (!BOT_TOKEN) throw new Error("Нет BOT_TOKEN");
 
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
-// ===================================================================
-// ===  FIRESTORE ФУНКЦИИ ============================================
-// ===================================================================
+const tempUsers = {};
+const usersCache = {}; // кэшируем чтобы быстро работать
+
+// ======================================================
+// УРОКИ (пример)
+// ======================================================
+
+const lessons = {
+  1: {
+    text: "Урок 1: Что такое ЛКМ?",
+    question: "Выбери правильный ответ:",
+    buttons: [
+      ["Лак"], ["Грунт"], ["Шпаклёвка"]
+    ],
+    correct: "Лак"
+  },
+  2: {
+    text: "Урок 2: Что такое грунт?",
+    question: "Выбери правильный ответ:",
+    buttons: [
+      ["Шпатлёвка"], ["Лак"], ["Грунт"]
+    ],
+    correct: "Грунт"
+  }
+};
+
+// ======================================================
+// Firestore функции
+// ======================================================
 
 async function loadUser(userId) {
   const doc = await db.collection("users").doc(String(userId)).get();
@@ -50,67 +71,78 @@ async function loadUser(userId) {
 
 async function saveUser(userId, data) {
   await db.collection("users").doc(String(userId)).set(data, { merge: true });
+  usersCache[userId] = data;
 }
 
-async function logProgress(userId, userState, result) {
+async function logProgress(userId, state, result) {
   await db.collection("progress").add({
     userId,
-    name: userState.name,
-    lesson: userState.currentLesson,
+    name: state.name,
+    lesson: state.currentLesson,
     result,
-    points: userState.points,
-    timestamp: Date.now(),
+    points: state.points,
+    ts: Date.now(),
   });
 }
 
-// ===================================================================
-// ===  ВРЕМЕННЫЕ ХРАНИЛИЩА ==========================================
-// ===================================================================
+// ======================================================
+// ОТПРАВКА УРОКА
+// ======================================================
 
-const tempUsers = {};
-const users = {};
+async function sendLesson(userId, lessonNumber) {
+  const chatId = Number(userId);
+  const lesson = lessons[lessonNumber];
 
-// ===================================================================
-// ===  УРОКИ =========================================================
-// ===================================================================
+  if (!lesson) return;
 
-const lessons = {
-  1: { text: "Урок 1: Что такое ЛКМ? Напиши ответ: ЛАК", answer: "лак" },
-  2: { text: "Урок 2: Что такое грунт? Напиши: ГРУНТ", answer: "грунт" },
-};
+  const keyboard = Markup.inlineKeyboard(
+    lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
+  );
 
-// ===================================================================
-// ===  /start ========================================================
-// ===================================================================
+  await bot.telegram.sendMessage(
+    chatId,
+    `📘 Урок ${lessonNumber}\n\n${lesson.text}\n\n${lesson.question}`,
+    keyboard
+  );
 
-bot.start(async (ctx) => {
+  const u = usersCache[userId];
+  u.waitingAnswer = true;
+  u.lastLessonAt = Date.now();
+  u.nextLessonAt = 0;
+
+  await saveUser(userId, u);
+}
+
+// ======================================================
+// /start
+// ======================================================
+
+bot.start(async ctx => {
   const userId = ctx.from.id;
 
   const saved = await loadUser(userId);
 
   if (saved) {
-    users[userId] = saved;
-    return ctx.reply(`С возвращением, ${saved.name}! Продолжаем 📚`);
+    usersCache[userId] = saved;
+    return ctx.reply(`С возвращением, ${saved.name}!`);
   }
 
-  tempUsers[userId] = { step: "ask_name" };
-  ctx.reply("Привет! Напиши своё имя для регистрации:");
+  tempUsers[userId] = { step: "name" };
+  ctx.reply("Привет! Напиши своё имя:");
 });
 
-// ===================================================================
-// ===  ОБРАБОТКА СООБЩЕНИЙ ===========================================
-// ===================================================================
+// ======================================================
+// Ответы пользователей
+// ======================================================
 
-bot.on("text", async (ctx) => {
+bot.on("text", async ctx => {
   const userId = ctx.from.id;
-  const text = ctx.message.text.trim().toLowerCase();
+  const text = ctx.message.text.trim();
 
   // Регистрация
-  if (tempUsers[userId]?.step === "ask_name") {
-    const name = ctx.message.text.trim();
-
+  if (tempUsers[userId]?.step === "name") {
     const userState = {
-      name,
+      name: text,
       currentLesson: 1,
       waitingAnswer: false,
       nextLessonAt: 0,
@@ -118,129 +150,88 @@ bot.on("text", async (ctx) => {
       points: 0,
     };
 
-    users[userId] = userState;
-    await saveUser(userId, userState);
-
     delete tempUsers[userId];
 
-    await ctx.reply(`Отлично, ${name}! Начинаем обучение.`);
-    return sendLesson(ctx, 1);
+    usersCache[userId] = userState;
+    await saveUser(userId, userState);
+
+    await ctx.reply(`Отлично, ${text}! Начинаем.`);
+    return sendLesson(userId, 1);
   }
+});
 
-  // Если не зарегистрирован
-  if (!users[userId]) return;
+// ======================================================
+// Ответы на кнопки
+// ======================================================
 
-  const u = users[userId];
+bot.on("callback_query", async ctx => {
+  const userId = ctx.from.id;
+  const answer = ctx.callbackQuery.data;
 
-  if (!u.waitingAnswer) return;
+  const u = usersCache[userId];
+  if (!u || !u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
-  if (!lesson) return ctx.reply("Уроки закончились 🎉");
 
-  if (text === lesson.answer.toLowerCase()) {
+  u.waitingAnswer = false;
+
+  if (answer === lesson.correct) {
     u.points++;
-    u.waitingAnswer = false;
     u.currentLesson++;
-    u.nextLessonAt = Date.now() + 24 * 3600 * 1000;
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;
 
-    await ctx.reply("✅ Правильно! Следующий урок через 24 часа.");
+    await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
-    await saveUser(userId, u);
 
   } else {
-    u.waitingAnswer = false;
     u.nextLessonAt = Date.now() + 30 * 60 * 1000;
 
-    await ctx.reply("❌ Ошибка. Повтор урока через 30 минут.");
+    await ctx.reply("❌ Неправильно. Тот же урок придёт через 30 минут.");
     await logProgress(userId, u, "FAIL");
-    await saveUser(userId, u);
-  }
-});
-
-// ===================================================================
-// === ОТПРАВКА УРОКА =================================================
-// ===================================================================
-
-async function sendLesson(ctx, lessonNumber) {
-  const userId = ctx.from.id;
-  const lesson = lessons[lessonNumber];
-
-  users[userId].waitingAnswer = true;
-  users[userId].lastLessonAt = Date.now();
-
-  await ctx.reply(`Урок ${lessonNumber}\n\n${lesson.text}`);
-
-  await saveUser(userId, users[userId]);
-}
-
-// ===================================================================
-// === ИТОГИ 90 ДНЕЙ ==================================================
-// ===================================================================
-
-async function calculateTotalPoints(userId) {
-  const snapshot = await db
-    .collection("progress")
-    .where("userId", "==", userId)
-    .get();
-
-  if (snapshot.empty) return 0;
-
-  let total = 0;
-
-  snapshot.forEach(doc => {
-    const data = doc.data();
-    if (data.result === "OK") total += 1;
-  });
-
-  // сохраняем итог
-  await db.collection("users").doc(String(userId)).set(
-    {
-      totalPoints90: total,
-      totalUpdatedAt: Date.now()
-    },
-    { merge: true }
-  );
-
-  return total;
-}
-
-bot.command("itog", async (ctx) => {
-  const userId = ctx.from.id;
-
-  const user = await loadUser(userId);
-  if (!user) {
-    return ctx.reply("Вы ещё не проходите обучение. Напишите /start");
   }
 
-  const total = await calculateTotalPoints(userId);
-
-  await ctx.reply(
-    `📊 *Итоги обучения*\n\n` +
-    `Имя: ${user.name}\n` +
-    `Всего набрано баллов: *${total}*\n`,
-    { parse_mode: "Markdown" }
-  );
+  await saveUser(userId, u);
 });
 
-// ===================================================================
-// === WEBHOOK ========================================================
-// ===================================================================
+// ======================================================
+// 🟦 АВТОМАТИЧЕСКИЙ ОТПРАВЩИК УРОКОВ
+// ======================================================
+
+setInterval(async () => {
+  const snapshot = await db.collection("users").get();
+  const now = Date.now();
+
+  for (const doc of snapshot.docs) {
+    const userId = doc.id;
+    const u = doc.data();
+
+    // не ждём урока → пропуск
+    if (u.waitingAnswer) continue;
+
+    // время не настало → пропуск
+    if (!u.nextLessonAt || now < u.nextLessonAt) continue;
+
+    // отправляем урок
+    await sendLesson(userId, u.currentLesson);
+  }
+}, 20000); // проверка каждые 20 секунд
+
+// ======================================================
+// WEBHOOK + SERVER
+// ======================================================
 
 if (WEBHOOK_URL) {
-  const path = "/telegram-webhook";
-
   bot.telegram.setWebhook(WEBHOOK_URL);
-  app.use(bot.webhookCallback(path));
+  app.use(bot.webhookCallback("/telegram-webhook"));
 
   app.get("/", (_, res) => res.send("Bot is running"));
 
-  app.listen(PORT, () => console.log("Server started:", PORT));
-
+  app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
-  console.log("➡ Запуск в режиме polling");
+  console.log("▶ Запуск POLLING");
   bot.launch();
 }
+// update
 
-// Корректное завершение
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
