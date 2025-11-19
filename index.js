@@ -174,6 +174,55 @@ async function sendLesson(ctx, lessonNumber) {
 }
 
 // ===================================================================
+// === ИТОГИ 90 ДНЕЙ ==================================================
+// ===================================================================
+
+async function calculateTotalPoints(userId) {
+  const snapshot = await db
+    .collection("progress")
+    .where("userId", "==", userId)
+    .get();
+
+  if (snapshot.empty) return 0;
+
+  let total = 0;
+
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    if (data.result === "OK") total += 1;
+  });
+
+  // сохраняем итог
+  await db.collection("users").doc(String(userId)).set(
+    {
+      totalPoints90: total,
+      totalUpdatedAt: Date.now()
+    },
+    { merge: true }
+  );
+
+  return total;
+}
+
+bot.command("itog", async (ctx) => {
+  const userId = ctx.from.id;
+
+  const user = await loadUser(userId);
+  if (!user) {
+    return ctx.reply("Вы ещё не проходите обучение. Напишите /start");
+  }
+
+  const total = await calculateTotalPoints(userId);
+
+  await ctx.reply(
+    `📊 *Итоги обучения*\n\n` +
+    `Имя: ${user.name}\n` +
+    `Всего набрано баллов: *${total}*\n`,
+    { parse_mode: "Markdown" }
+  );
+});
+
+// ===================================================================
 // === WEBHOOK ========================================================
 // ===================================================================
 
@@ -191,42 +240,6 @@ if (WEBHOOK_URL) {
   console.log("➡ Запуск в режиме polling");
   bot.launch();
 }
-
-bot.command('итоги', async (ctx) => {
-  try {
-    const usersSnap = await db.collection('users').get();
-
-    if (usersSnap.empty) {
-      return ctx.reply("Пользователи не найдены.");
-    }
-
-    let result = "🏆 Итоги обучения за 90 дней:\n\n";
-
-    const users = [];
-
-    usersSnap.forEach(doc => {
-      const data = doc.data();
-      users.push({
-        name: data.name,
-        points: data.points || 0
-      });
-    });
-
-    // сортировка по количеству баллов (от большего к меньшему)
-    users.sort((a, b) => b.points - a.points);
-
-    users.forEach((u, i) => {
-      result += `${i + 1}. ${u.name} — ${u.points} баллов\n`;
-    });
-
-    ctx.reply(result);
-
-  } catch (err) {
-    console.error("Ошибка получения итогов:", err.message);
-    ctx.reply("Произошла ошибка при загрузке итогов.");
-  }
-});
-
 
 // Корректное завершение
 process.once("SIGINT", () => bot.stop("SIGINT"));
