@@ -192,6 +192,42 @@ if (WEBHOOK_URL) {
   bot.launch();
 }
 
+bot.command('итоги', async (ctx) => {
+  try {
+    const usersSnap = await db.collection('users').get();
+
+    if (usersSnap.empty) {
+      return ctx.reply("Пользователи не найдены.");
+    }
+
+    let result = "🏆 Итоги обучения за 90 дней:\n\n";
+
+    const users = [];
+
+    usersSnap.forEach(doc => {
+      const data = doc.data();
+      users.push({
+        name: data.name,
+        points: data.points || 0
+      });
+    });
+
+    // сортировка по количеству баллов (от большего к меньшему)
+    users.sort((a, b) => b.points - a.points);
+
+    users.forEach((u, i) => {
+      result += `${i + 1}. ${u.name} — ${u.points} баллов\n`;
+    });
+
+    ctx.reply(result);
+
+  } catch (err) {
+    console.error("Ошибка получения итогов:", err.message);
+    ctx.reply("Произошла ошибка при загрузке итогов.");
+  }
+});
+
+
 // Корректное завершение
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
