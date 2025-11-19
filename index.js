@@ -14,50 +14,29 @@ const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
 // --------- ЛОГИКА БОТА ---------
-bot.start((ctx) => {
-  ctx.reply('Привет! Бот запущен и работает через Render ✅');
-});
+bot.start((ctx) => ctx.reply('Привет! Бот запущен через Render ✅'));
+bot.hears('тест', (ctx) => ctx.reply('Бот живой 💪'));
 
-bot.hears('тест', (ctx) => {
-  ctx.reply('Бот живой, всё отлично 💪');
-});
+// --------- WEBHOOK ---------
+const path = '/telegram-webhook';
 
-// --------- НАСТРОЙКА WEBHOOK ---------
 if (WEBHOOK_URL) {
-  // путь, по которому будет принимать запросы наш сервер
-  const path = '/telegram-webhook';
+  bot.telegram.setWebhook(`${WEBHOOK_URL}${path}`);
 
-  bot.telegram.setWebhook(WEBHOOK_URL);
+  app.use(path, bot.webhookCallback(path));
 
-  app.use(bot.webhookCallback(path));
-
-  app.get('/', (req, res) => {
-    res.send('Bot is running');
-  });
-
-  app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-    console.log(`Webhook URL: ${WEBHOOK_URL}`);
-  });
+  app.get('/', (req, res) => res.send('Bot is running'));
 } else {
-  // Режим polling — только для локальных тестов
-  console.log('WEBHOOK_URL не указан. Запускаю bot.launch() (long polling)...');
+  console.log('WEBHOOK_URL не указан. Запускаю long polling...');
   bot.launch();
 }
 
-// Start server
+// --------- СТАРТ СЕРВЕРА ---------
 app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-    console.log(`Webhook URL: ${WEBHOOK_URL}`);
+  console.log(`Server listening on port ${PORT}`);
+  console.log(`Webhook URL: ${WEBHOOK_URL}${path}`);
 });
 
-// Graceful shutdown
-process.once('SIGINT', () => {
-    console.log('SIGINT received → shutting down cleanly');
-    process.exit(0);
-});
-
-process.once('SIGTERM', () => {
-    console.log('SIGTERM received → shutting down cleanly');
-    process.exit(0);
-});
+// --------- GRACEFUL SHUTDOWN ---------
+process.once('SIGINT', () => process.exit(0));
+process.once('SIGTERM', () => process.exit(0));
