@@ -12,7 +12,7 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
 // JSON с сервисным аккаунтом (мы положили в GOOGLE_SERVICE_ACCOUNT)
-const GOOGLE_SERVICE_ACCOUNT = process.env.GOOGLE_SERVICE_ACCOUNT;
+const GOOGLE_CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
 // ID таблицы (мы положили в SPREADSHEET_ID)
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
@@ -31,7 +31,7 @@ let sheets = null;
 
 if (GOOGLE_SERVICE_ACCOUNT && SPREADSHEET_ID) {
   try {
-    const credentials = JSON.parse(GOOGLE_SERVICE_ACCOUNT);
+const credentials = GOOGLE_CREDENTIALS;
 
     const auth = new google.auth.JWT(
       credentials.client_email,
@@ -70,7 +70,7 @@ async function logRegistrationToSheets(userId, name, username) {
     });
     console.log(`📝 USERS: добавлен ${userId} | ${name}`);
   } catch (err) {
-    console.error('Ошибка записи в USERS:', err.message);
+console.error('Ошибка записи в USERS:', err.message, err.errors || '');
   }
 }
 
