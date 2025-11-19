@@ -13,30 +13,29 @@ if (!BOT_TOKEN) {
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
-// --------- ЛОГИКА БОТА ---------
-bot.start((ctx) => ctx.reply('Привет! Бот запущен через Render ✅'));
-bot.hears('тест', (ctx) => ctx.reply('Бот живой 💪'));
+// ===== ЛОГИКА БОТА =====
+bot.start((ctx) => ctx.reply('Привет! Бот запущен через Render 🚀'));
+bot.hears('тест', (ctx) => ctx.reply('Бот работает 💪'));
 
-// --------- WEBHOOK ---------
-const path = '/telegram-webhook';
-
+// ===== WEBHOOK =====
 if (WEBHOOK_URL) {
-  bot.telegram.setWebhook(`${WEBHOOK_URL}${path}`);
+  const path = '/telegram-webhook';
 
-  app.use(path, bot.webhookCallback(path));
+  bot.telegram.setWebhook(WEBHOOK_URL);
+  app.use(bot.webhookCallback(path));
 
   app.get('/', (req, res) => res.send('Bot is running'));
+
+  app.listen(PORT, () => {
+    console.log(`Server started on port ${PORT}`);
+    console.log(`Webhook path: ${WEBHOOK_URL}`);
+  });
+
 } else {
-  console.log('WEBHOOK_URL не указан. Запускаю long polling...');
+  console.log('WEBHOOK_URL отсутствует → запускаю polling');
   bot.launch();
 }
 
-// --------- СТАРТ СЕРВЕРА ---------
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-  console.log(`Webhook URL: ${WEBHOOK_URL}${path}`);
-});
-
-// --------- GRACEFUL SHUTDOWN ---------
-process.once('SIGINT', () => process.exit(0));
-process.once('SIGTERM', () => process.exit(0));
+// ===== Корректное завершение =====
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
