@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const express = require('express');
-const { google } = require('googleapis'); // <─ Google API
+const { google } = require('googleapis');
 
 // ===================================================================
 // ===  БАЗОВЫЕ ПЕРЕМЕННЫЕ  ==========================================
@@ -11,13 +11,25 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
-// JSON с сервисным аккаунтом (мы положили в GOOGLE_SERVICE_ACCOUNT)
-const GOOGLE_CREDENTIALS = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-// ID таблицы (мы положили в SPREADSHEET_ID)
+// JSON сервисного аккаунта:
+// можно хранить либо в GOOGLE_CREDENTIALS, либо в GOOGLE_SERVICE_ACCOUNT
+const rawGoogleCreds =
+  process.env.GOOGLE_CREDENTIALS || process.env.GOOGLE_SERVICE_ACCOUNT || null;
+
+let GOOGLE_CREDENTIALS = null;
+if (rawGoogleCreds) {
+  try {
+    GOOGLE_CREDENTIALS = JSON.parse(rawGoogleCreds);
+  } catch (e) {
+    console.error('❌ Не удалось распарсить GOOGLE_* как JSON:', e.message);
+  }
+}
+
+// ID таблицы с листами USERS / DB / PROGRESS
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 if (!BOT_TOKEN) {
-  throw new Error('Не указан BOT_TOKEN в .env');
+  throw new Error('Не указан BOT_TOKEN в переменных окружения');
 }
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -29,14 +41,12 @@ const app = express();
 
 let sheets = null;
 
-if (GOOGLE_SERVICE_ACCOUNT && SPREADSHEET_ID) {
+if (GOOGLE_CREDENTIALS && SPREADSHEET_ID) {
   try {
-const credentials = GOOGLE_CREDENTIALS;
-
     const auth = new google.auth.JWT(
-      credentials.client_email,
+      GOOGLE_CREDENTIALS.client_email,
       null,
-      credentials.private_key,
+      GOOGLE_CREDENTIALS.private_key,
       ['https://www.googleapis.com/auth/spreadsheets']
     );
 
@@ -46,7 +56,9 @@ const credentials = GOOGLE_CREDENTIALS;
     console.error('❌ Ошибка инициализации Google Sheets:', err.message);
   }
 } else {
-  console.warn('⚠ GOOGLE_SERVICE_ACCOUNT или SPREADSHEET_ID не заданы — лог в таблицу отключён');
+  console.warn(
+    '⚠ GOOGLE_CREDENTIALS/GOOGLE_SERVICE_ACCOUNT или SPREADSHEET_ID не заданы — работа с таблицами отключена'
+  );
 }
 
 // -------------------------------------------------------------------
@@ -70,7 +82,7 @@ async function logRegistrationToSheets(userId, name, username) {
     });
     console.log(`📝 USERS: добавлен ${userId} | ${name}`);
   } catch (err) {
-console.error('Ошибка записи в USERS:', err.message, err.errors || '');
+    console.error('Ошибка записи в USERS:', err.message, err.errors || '');
   }
 }
 
@@ -93,21 +105,23 @@ async function logProgressToSheets(userId, userState, result) {
           String(userId),
           userState.name,
           userState.currentLesson,
-          result,                 // 'OK' или 'FAIL'
+          result, // 'OK' или 'FAIL'
           userState.points,
           now,
           nextAt,
         ]],
       },
     });
-    console.log(`📝 PROGRESS: ${userId} | lesson=${userState.currentLesson} | ${result}`);
+    console.log(
+      `📝 PROGRESS: ${userId} | lesson=${userState.currentLesson} | ${result}`
+    );
   } catch (err) {
     console.error('Ошибка записи в PROGRESS:', err.message);
   }
 }
 
 // ===================================================================
-// ===  БАЗА ДАННЫХ (Google Sheets → лист DB) ========================
+// ===  БАЗА ДАННЫХ (лист DB)  =======================================
 // ===================================================================
 // Заголовки в DB: user_id | name | currentLesson | points | nextLessonAt | lastLessonAt | waitingAnswer
 
@@ -146,6 +160,7 @@ async function saveUserToDB(userId) {
   const u = users[userId];
 
   try {
+    // получаем только user_id из DB
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'DB!A2:A9999',
@@ -190,16 +205,16 @@ async function saveUserToDB(userId) {
 }
 
 // ===================================================================
-// ===  ЭТАП 2. РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ  ============================
+// ===  ЛОГИКА ОБУЧЕНИЯ  =============================================
 // ===================================================================
 
-// Временное хранилище для регистрации (позже заменим на БД/Google Sheets)
+// Временное хранилище для регистрации
 const tempUsers = {};
 
-// Основное хранилище прогресса (сейчас в памяти, DB-лист — постоянное хранилище)
+// Основное хранилище прогресса в памяти
 const users = {};
 
-// Уроки (позже сюда будет 90 уроков)
+// Уроки (позже сюда закинем 90 уроков)
 const lessons = {
   1: {
     text: 'Урок 1: Что такое ЛКМ?\n\nНапиши одно слово: "лак"',
@@ -211,7 +226,7 @@ const lessons = {
   },
 };
 
-// ===== /start → проверка в DB + регистрация =====
+// ===== /start → проверка в DB + регистрация ========================
 bot.start(async (ctx) => {
   const userId = ctx.from.id;
 
@@ -230,7 +245,7 @@ bot.start(async (ctx) => {
 });
 
 // ===================================================================
-// ===  ЭТАП 3. РЕГИСТРАЦИЯ + ПРОГРЕСС + ОТВЕТЫ НА УРОКИ ============
+// ===  РЕГИСТРАЦИЯ + ПРОГРЕСС + ОТВЕТЫ НА УРОКИ =====================
 // ===================================================================
 
 bot.on('text', async (ctx) => {
@@ -238,14 +253,13 @@ bot.on('text', async (ctx) => {
   const msgRaw = ctx.message.text || '';
   const msg = msgRaw.trim();
 
-  // 1) Если пользователь в процессе регистрации → обрабатываем регистрацию
+  // 1) Регистрация
   if (tempUsers[userId]?.step === 'ask_name') {
     const name = msg;
     const username = ctx.from.username || '';
 
     console.log(`Регистрация → ${userId} | Имя: ${name}`);
 
-    // создаём запись прогресса
     users[userId] = {
       name,
       currentLesson: 1,
@@ -255,11 +269,9 @@ bot.on('text', async (ctx) => {
       points: 0,
     };
 
-    // лог в USERS и сохранение в DB
     await logRegistrationToSheets(userId, name, username);
     await saveUserToDB(userId);
 
-    // выходим из режима регистрации
     delete tempUsers[userId];
 
     await ctx.reply(`Отлично, ${name}! Регистрация завершена ✅`);
@@ -267,12 +279,12 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // 2) Если пользователь НЕ зарегистрирован и не регистрируется — игнорим
+  // 2) Если пользователь НЕ зарегистрирован — игнорим
   if (!users[userId]) {
     return;
   }
 
-  // 3) Если сейчас НЕ ждём его ответа на урок → игнорим (антиспам)
+  // 3) Если бот сейчас НЕ ждёт ответа — игнорим (антиспам)
   if (!users[userId].waitingAnswer) {
     return;
   }
@@ -297,35 +309,32 @@ bot.on('text', async (ctx) => {
     userState.waitingAnswer = false;
     userState.points += 1;
 
-    await ctx.reply('✅ Правильно! Балл начислён. Следующий урок придёт через 24 часа.');
+    await ctx.reply(
+      '✅ Правильно! Балл начислён. Следующий урок придёт через 24 часа.'
+    );
 
-    // следующий урок через 24 часа
-    userState.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;
+    userState.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // 24 часа
     userState.currentLesson += 1;
 
     console.log(
-      `USER ${userId} (${userState.name}) | lesson ${currentLesson} OK | points=${userState.points}`,
+      `USER ${userId} (${userState.name}) | lesson ${currentLesson} OK | points=${userState.points}`
     );
 
-    // лог в PROGRESS + сохранение в DB
     await logProgressToSheets(userId, userState, 'OK');
     await saveUserToDB(userId);
-
-    // тут позже добавим реальную отправку по таймеру
     return;
   }
 
   // ===== Неправильный ответ =========================================
   userState.waitingAnswer = false;
-  userState.nextLessonAt = Date.now() + 30 * 60 * 1000; // повтор через 30 минут
+  userState.nextLessonAt = Date.now() + 30 * 60 * 1000; // 30 минут
 
   await ctx.reply('❌ Неправильно. Тот же урок придёт снова через 30 минут.');
 
   console.log(
-    `USER ${userId} (${userState.name}) | lesson ${currentLesson} FAIL | points=${userState.points}`,
+    `USER ${userId} (${userState.name}) | lesson ${currentLesson} FAIL | points=${userState.points}`
   );
 
-  // лог в PROGRESS + сохранение в DB
   await logProgressToSheets(userId, userState, 'FAIL');
   await saveUserToDB(userId);
 });
@@ -336,9 +345,7 @@ bot.on('text', async (ctx) => {
 async function sendLesson(ctx, lessonNumber) {
   const userId = ctx.from.id;
 
-  if (!users[userId]) {
-    return;
-  }
+  if (!users[userId]) return;
 
   const lesson = lessons[lessonNumber];
 
@@ -349,12 +356,12 @@ async function sendLesson(ctx, lessonNumber) {
 
   users[userId].waitingAnswer = true;
   users[userId].lastLessonAt = Date.now();
-  users[userId].nextLessonAt = 0; // будет выставлен после ответа
+  users[userId].nextLessonAt = 0; // выставится после ответа
 
   await ctx.reply(`Урок №${lessonNumber}\n\n${lesson.text}\n\nНапиши ответ:`);
 
   console.log(
-    `SEND LESSON ${lessonNumber} → user ${userId} (${users[userId].name})`,
+    `SEND LESSON ${lessonNumber} → user ${userId} (${users[userId].name})`
   );
 
   await saveUserToDB(userId);
@@ -372,11 +379,9 @@ bot.hears('тест', (ctx) => ctx.reply('Бот работает 💪'));
 if (WEBHOOK_URL) {
   const path = '/telegram-webhook';
 
-  // подключаем webhook
   bot.telegram.setWebhook(WEBHOOK_URL);
   app.use(bot.webhookCallback(path));
 
-  // проверка работы сервера
   app.get('/', (req, res) => res.send('Bot is running'));
 
   app.listen(PORT, () => {
@@ -384,10 +389,10 @@ if (WEBHOOK_URL) {
     console.log(`Webhook path: ${WEBHOOK_URL}`);
   });
 } else {
-  console.log('WEBHOOK_URL отсутствует → запускаю polling');
+  console.log('WEBHOOK_URL отсутствует → запускаю long polling');
   bot.launch();
 }
 
-// ===== Корректное завершение =====
+// ===== Корректное завершение =======================================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
