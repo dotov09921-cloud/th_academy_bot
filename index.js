@@ -1,10 +1,20 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const express = require('express');
+const { google } = require('googleapis'); // <─ Google API
+
+// ===================================================================
+// ===  БАЗОВЫЕ ПЕРЕМЕННЫЕ  ==========================================
+// ===================================================================
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
+
+// JSON с сервисным аккаунтом (мы положили в GOOGLE_SERVICE_ACCOUNT)
+const GOOGLE_SERVICE_ACCOUNT = process.env.GOOGLE_SERVICE_ACCOUNT;
+// ID таблицы (мы положили в SPREADSHEET_ID)
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 if (!BOT_TOKEN) {
   throw new Error('Не указан BOT_TOKEN в .env');
@@ -14,13 +24,96 @@ const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
 // ===================================================================
-// ===  ЭТАП 2. РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ  ==============================
+// ===  GOOGLE SHEETS: ИНИЦИАЛИЗАЦИЯ  ================================
+// ===================================================================
+
+let sheets = null;
+
+if (GOOGLE_SERVICE_ACCOUNT && SPREADSHEET_ID) {
+  try {
+    const credentials = JSON.parse(GOOGLE_SERVICE_ACCOUNT);
+
+    const auth = new google.auth.JWT(
+      credentials.client_email,
+      null,
+      credentials.private_key,
+      ['https://www.googleapis.com/auth/spreadsheets']
+    );
+
+    sheets = google.sheets({ version: 'v4', auth });
+    console.log('✅ Google Sheets инициализирован');
+  } catch (err) {
+    console.error('❌ Ошибка инициализации Google Sheets:', err.message);
+  }
+} else {
+  console.warn('⚠ GOOGLE_SERVICE_ACCOUNT или SPREADSHEET_ID не заданы — лог в таблицу отключён');
+}
+
+// -------------------------------------------------------------------
+// === ФУНКЦИИ ДЛЯ ЛОГА В GOOGLE SHEETS ===============================
+// -------------------------------------------------------------------
+
+// USERS!A:D → user_id | name | username | created_at
+async function logRegistrationToSheets(userId, name, username) {
+  if (!sheets || !SPREADSHEET_ID) return;
+
+  const now = new Date().toISOString();
+
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'USERS!A:D',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[String(userId), name, username || '', now]],
+      },
+    });
+    console.log(`📝 USERS: добавлен ${userId} | ${name}`);
+  } catch (err) {
+    console.error('Ошибка записи в USERS:', err.message);
+  }
+}
+
+// PROGRESS!A:G → user_id | name | lesson | result | points | last_at | next_at
+async function logProgressToSheets(userId, userState, result) {
+  if (!sheets || !SPREADSHEET_ID) return;
+
+  const now = new Date().toISOString();
+  const nextAt = userState.nextLessonAt
+    ? new Date(userState.nextLessonAt).toISOString()
+    : '';
+
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'PROGRESS!A:G',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[
+          String(userId),
+          userState.name,
+          userState.currentLesson,
+          result,                 // 'OK' или 'FAIL'
+          userState.points,
+          now,
+          nextAt,
+        ]],
+      },
+    });
+    console.log(`📝 PROGRESS: ${userId} | lesson=${userState.currentLesson} | ${result}`);
+  } catch (err) {
+    console.error('Ошибка записи в PROGRESS:', err.message);
+  }
+}
+
+// ===================================================================
+// ===  ЭТАП 2. РЕГИСТРАЦИЯ ПОЛЬЗОВАТЕЛЯ  ============================
 // ===================================================================
 
 // Временное хранилище для регистрации (позже заменим на БД/Google Sheets)
 const tempUsers = {};
 
-// Основное хранилище прогресса (позже вынесем в Google Sheets/БД)
+// Основное хранилище прогресса (сейчас в памяти, табличка — как лог)
 const users = {};
 
 // Уроки (позже сюда будет 90 уроков)
@@ -46,7 +139,7 @@ bot.start(async (ctx) => {
 });
 
 // ===================================================================
-// ===  ЭТАП 3. РЕГИСТРАЦИЯ + ПРОГРЕСС + ОТВЕТЫ НА УРОКИ ==============
+// ===  ЭТАП 3. РЕГИСТРАЦИЯ + ПРОГРЕСС + ОТВЕТЫ НА УРОКИ ============
 // ===================================================================
 
 bot.on('text', async (ctx) => {
@@ -57,10 +150,11 @@ bot.on('text', async (ctx) => {
   // 1) Если пользователь в процессе регистрации → обрабатываем регистрацию
   if (tempUsers[userId]?.step === 'ask_name') {
     const name = msg;
+    const username = ctx.from.username || '';
 
     console.log(`Регистрация → ${userId} | Имя: ${name}`);
 
-    // создаём запись прогресса
+    // создаём запись прогресса в памяти
     users[userId] = {
       name,
       currentLesson: 1,
@@ -69,6 +163,9 @@ bot.on('text', async (ctx) => {
       lastLessonAt: 0,
       points: 0,
     };
+
+    // лог в Google Sheets (USERS)
+    await logRegistrationToSheets(userId, name, username);
 
     // выходим из режима регистрации
     delete tempUsers[userId];
@@ -117,6 +214,9 @@ bot.on('text', async (ctx) => {
       `USER ${userId} (${userState.name}) | lesson ${currentLesson} OK | points=${userState.points}`,
     );
 
+    // лог в PROGRESS
+    await logProgressToSheets(userId, userState, 'OK');
+
     // здесь позже добавим реальную отправку по таймеру
     return;
   }
@@ -130,6 +230,9 @@ bot.on('text', async (ctx) => {
   console.log(
     `USER ${userId} (${userState.name}) | lesson ${currentLesson} FAIL | points=${userState.points}`,
   );
+
+  // лог в PROGRESS
+  await logProgressToSheets(userId, userState, 'FAIL');
 });
 
 // -------------------------------------------------------------------
@@ -164,7 +267,6 @@ async function sendLesson(ctx, lessonNumber) {
 // ===== Доп. команда для теста ======================================
 // ===================================================================
 bot.hears('тест', (ctx) => ctx.reply('Бот работает 💪'));
-
 
 // ===================================================================
 // ======================   WEBHOOK   ================================
