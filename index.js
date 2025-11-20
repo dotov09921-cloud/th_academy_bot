@@ -177,7 +177,7 @@ bot.on("callback_query", async ctx => {
 
     u.points += 1;                  // +1 балл
     u.currentLesson += 1;           // следующий урок
-    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // 24 часа
+    u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
@@ -192,7 +192,7 @@ bot.on("callback_query", async ctx => {
       u.points -= 1;               // штраф -1, только если > 0
     }
 
-    u.nextLessonAt = Date.now() + 30 * 60 * 1000; // 30 минут на повтор
+    u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("❌ Ошибка. Балл снят. Этот же урок придёт через 30 минут.");
     await logProgress(userId, u, "FAIL");
