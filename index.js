@@ -168,7 +168,7 @@ bot.action("role_employee", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId];
 
-  u.role = "employee";
+  u.role = "сотрудник";   // <-- русский вариант
   await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
@@ -179,7 +179,7 @@ bot.action("role_client", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId];
 
-  u.role = "client";
+  u.role = "клиент";       // <-- русский вариант
   await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
