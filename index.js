@@ -80,8 +80,16 @@ async function sendLesson(userId, lessonNumber) {
 
   if (!lesson) {
     await bot.telegram.sendMessage(chatId, "🎉 Все 90 уроков пройдены! Молодец!");
+
+    const u = usersCache[userId];
+    u.finished = true;
+    u.waitingAnswer = false;
+    u.nextLessonAt = null;
+
+    await saveUser(userId, u);
     return;
-  }
+}
+
 
   const keyboard = Markup.inlineKeyboard(
     lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
