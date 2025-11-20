@@ -88,8 +88,7 @@ async function sendLesson(userId, lessonNumber) {
 
     await saveUser(userId, u);
     return;
-}
-
+  }
 
   const keyboard = Markup.inlineKeyboard(
     lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
@@ -135,7 +134,7 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // регистрация
+  // регистрация — имя
   if (tempUsers[userId]?.step === "name") {
     const userState = {
       name: text,
@@ -146,14 +145,45 @@ bot.on("text", async ctx => {
       points: 0,
     };
 
-    delete tempUsers[userId];
-
     usersCache[userId] = userState;
     await saveUser(userId, userState);
 
-    await ctx.reply(`Отлично, ${text}! Начинаем обучение.`);
-    return sendLesson(userId, 1);
+    tempUsers[userId] = { step: "role" };
+
+    return ctx.reply(
+      "Отлично! Теперь выбери свой статус:",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
+        [Markup.button.callback("🧑 Клиент", "role_client")],
+      ])
+    );
   }
+});
+
+// ======================================================
+// ВЫБОР РОЛИ
+// ======================================================
+
+bot.action("role_employee", async ctx => {
+  const userId = ctx.from.id;
+  const u = usersCache[userId];
+
+  u.role = "employee";
+  await saveUser(userId, u);
+
+  await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
+  return sendLesson(userId, u.currentLesson);
+});
+
+bot.action("role_client", async ctx => {
+  const userId = ctx.from.id;
+  const u = usersCache[userId];
+
+  u.role = "client";
+  await saveUser(userId, u);
+
+  await ctx.reply("Статус сохранён: 🧑 Клиент");
+  return sendLesson(userId, u.currentLesson);
 });
 
 // ======================================================
@@ -165,18 +195,19 @@ bot.on("callback_query", async ctx => {
   const answer = ctx.callbackQuery.data;
 
   const u = usersCache[userId];
+
+  // игнорировать колбэки выбора роли (они обработаны выше)
+  if (answer.startsWith("role_")) return;
+
   if (!u || !u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  // ============================
-  //     ПРАВИЛЬНЫЙ ОТВЕТ
-  // ============================
   if (answer === lesson.correct) {
 
-    u.points += 1;                  // +1 балл
-    u.currentLesson += 1;           // следующий урок
+    u.points += 1;
+    u.currentLesson += 1;
     u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
@@ -184,13 +215,7 @@ bot.on("callback_query", async ctx => {
 
   } else {
 
-    // ============================
-    //     НЕПРАВИЛЬНЫЙ ОТВЕТ
-    // ============================
-
-    if (u.points > 0) {
-      u.points -= 1;               // штраф -1, только если > 0
-    }
+    if (u.points > 0) u.points -= 1;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
 
@@ -201,9 +226,8 @@ bot.on("callback_query", async ctx => {
   await saveUser(userId, u);
 });
 
-
 // ======================================================
-// АВТОМАТИЧЕСКИЙ ОТПРАВЩИК УРОКОВ
+// АВТО-ОТПРАВКА УРОКОВ
 // ======================================================
 
 setInterval(async () => {
@@ -214,14 +238,13 @@ setInterval(async () => {
     const userId = doc.id;
     const u = doc.data();
 
-    if (u.finished) continue;        // 🚀 Фикс спама
+    if (u.finished) continue;
     if (u.waitingAnswer) continue;
     if (!u.nextLessonAt || now < u.nextLessonAt) continue;
 
     await sendLesson(userId, u.currentLesson);
   }
 }, 20000);
-
 
 // ======================================================
 // WEBHOOK / POLLING
