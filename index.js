@@ -200,12 +200,14 @@ setInterval(async () => {
     const userId = doc.id;
     const u = doc.data();
 
+    if (u.finished) continue;        // 🚀 Фикс спама
     if (u.waitingAnswer) continue;
     if (!u.nextLessonAt || now < u.nextLessonAt) continue;
 
     await sendLesson(userId, u.currentLesson);
   }
 }, 20000);
+
 
 // ======================================================
 // WEBHOOK / POLLING
