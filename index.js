@@ -165,13 +165,13 @@ bot.on("callback_query", async ctx => {
   if (answer === lesson.correct) {
     u.points++;
     u.currentLesson++;
-    u.nextLessonAt = Date.now() + 10 * 1000;
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;  // 24 часа
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
 
   } else {
-  u.nextLessonAt = Date.now() + 10 * 1000;
+    u.nextLessonAt = Date.now() + 30 * 60 * 1000; // 30 минут
 
     await ctx.reply("❌ Ошибка. Этот же урок придёт через 30 минут.");
     await logProgress(userId, u, "FAIL");
