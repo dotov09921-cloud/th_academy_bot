@@ -170,37 +170,23 @@ bot.on("callback_query", async ctx => {
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  // ============================
-  //     ПРАВИЛЬНЫЙ ОТВЕТ
-  // ============================
   if (answer === lesson.correct) {
-
-    u.points += 1;                  // +1 балл
-    u.currentLesson += 1;           // следующий урок
-    u.nextLessonAt = Date.now() + 10 * 1000;
+    u.points++;
+    u.currentLesson++;
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;  // 24 часа
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
 
   } else {
+    u.nextLessonAt = Date.now() + 30 * 60 * 1000; // 30 минут
 
-    // ============================
-    //     НЕПРАВИЛЬНЫЙ ОТВЕТ
-    // ============================
-
-    if (u.points > 0) {
-      u.points -= 1;               // штраф -1, только если > 0
-    }
-
-    u.nextLessonAt = Date.now() + 10 * 1000;
-
-    await ctx.reply("❌ Ошибка. Балл снят. Этот же урок придёт через 30 минут.");
+    await ctx.reply("❌ Ошибка. Этот же урок придёт через 30 минут.");
     await logProgress(userId, u, "FAIL");
   }
 
   await saveUser(userId, u);
 });
-
 
 // ======================================================
 // АВТОМАТИЧЕСКИЙ ОТПРАВЩИК УРОКОВ
@@ -216,6 +202,9 @@ setInterval(async () => {
 
     if (u.finished) continue;        // 🚀 Фикс спама
     if (u.waitingAnswer) continue;
+
+
+
     if (!u.nextLessonAt || now < u.nextLessonAt) continue;
 
     await sendLesson(userId, u.currentLesson);
