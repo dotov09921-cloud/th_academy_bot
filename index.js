@@ -184,7 +184,7 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА: /rating
+// /rating
 // ======================================================
 
 bot.command("rating", async ctx => {
@@ -207,11 +207,11 @@ bot.command("rating", async ctx => {
     text += `${i + 1}) ${u.name} — *${u.points}*\n`;
   });
 
-  ctx.replyWithMarkdown(text);
+  ctx.reply(text, { parse_mode: "Markdown" });
 });
 
 // ======================================================
-// КОМАНДА: /itog
+// /itog
 // ======================================================
 
 bot.command("itog", async ctx => {
@@ -230,27 +230,26 @@ bot.command("itog", async ctx => {
 🔥 Серия правильных: *${u.streak || 0}*
 `;
 
-  ctx.replyWithMarkdown(text);
+  ctx.reply(text, { parse_mode: "Markdown" });
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
+// CALLBACKS — ОТВЕТЫ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
+  if (answer.startsWith("role_")) return;
+
   const u = usersCache[userId];
   if (!u || !u.waitingAnswer) return;
-
-  if (answer.startsWith("role_")) return;
 
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
-
     u.streak = (u.streak || 0) + 1;
     u.points++;
 
@@ -267,7 +266,6 @@ bot.on("callback_query", async ctx => {
     await logProgress(userId, u, "OK");
 
   } else {
-
     u.streak = 0;
     if (u.points > 0) u.points--;
 
@@ -281,7 +279,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА УРОКОВ
+// АВТО-ОТПРАВКА
 // ======================================================
 
 setInterval(async () => {
