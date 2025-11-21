@@ -166,25 +166,21 @@ bot.on("text", async ctx => {
 // ======================================================
 
 bot.action("role_employee", async ctx => {
-  const userId = ctx.from.id;
-  const u = usersCache[userId];
-
+  const u = usersCache[ctx.from.id];
   u.role = "сотрудник";
-  await saveUser(userId, u);
+  await saveUser(ctx.from.id, u);
 
   await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
-  return sendLesson(userId, u.currentLesson);
+  return sendLesson(ctx.from.id, u.currentLesson);
 });
 
 bot.action("role_client", async ctx => {
-  const userId = ctx.from.id;
-  const u = usersCache[userId];
-
+  const u = usersCache[ctx.from.id];
   u.role = "клиент";
-  await saveUser(userId, u);
+  await saveUser(ctx.from.id, u);
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
-  return sendLesson(userId, u.currentLesson);
+  return sendLesson(ctx.from.id, u.currentLesson);
 });
 
 // ======================================================
@@ -215,14 +211,13 @@ bot.command("rating", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /itog
+// КОМАНДА: /itog
 // ======================================================
 
 bot.command("itog", async ctx => {
   const userId = ctx.from.id;
+  let u = usersCache[userId] || await loadUser(userId);
 
-  let u = usersCache[userId];
-  if (!u) u = await loadUser(userId);
   if (!u) return ctx.reply("Вы ещё не начали обучение. Нажмите /start");
 
   let text = `
