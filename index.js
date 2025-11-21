@@ -204,27 +204,49 @@ bot.on("callback_query", async ctx => {
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  if (answer === lesson.correct) {
+// ============================
+//     ПРАВИЛЬНЫЙ ОТВЕТ
+// ============================
+if (answer === lesson.correct) {
 
+  // увеличиваем streak (серия правильных)
+  u.streak = (u.streak || 0) + 1;
+
+  // обычный балл за правильный ответ
+  u.points += 1;
+
+  // бонус за 3 подряд
+  if (u.streak === 3) {
     u.points += 1;
-    u.currentLesson += 1;
-    u.nextLessonAt = Date.now() + 10 * 1000;
-
-    await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
-    await logProgress(userId, u, "OK");
-
-  } else {
-
-    if (u.points > 0) u.points -= 1;
-
-    u.nextLessonAt = Date.now() + 10 * 1000;
-
-    await ctx.reply("❌ Ошибка. Балл снят. Этот же урок придёт через 30 минут.");
-    await logProgress(userId, u, "FAIL");
+    await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
   }
 
-  await saveUser(userId, u);
-});
+  u.currentLesson += 1; // следующий урок
+  u.nextLessonAt = Date.now() + 10 * 1000;
+
+  await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
+  await logProgress(userId, u, "OK");
+
+} else {
+
+  // ============================
+  //     НЕПРАВИЛЬНЫЙ ОТВЕТ
+  // ============================
+
+  // сброс серии подряд
+  u.streak = 0;
+
+  // штраф, если есть баллы
+  if (u.points > 0) u.points -= 1;
+
+  u.nextLessonAt = Date.now() + 10 * 1000;
+
+  await ctx.reply("❌ Ошибка. Балл снят. Этот же урок придёт через 30 минут.");
+  await logProgress(userId, u, "FAIL");
+}
+
+await saveUser(userId, u);
+
 
 // ======================================================
 // АВТО-ОТПРАВКА УРОКОВ
