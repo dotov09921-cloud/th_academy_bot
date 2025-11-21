@@ -127,7 +127,7 @@ bot.start(async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
+// ОБРАБОТКА ТЕКСТОВ
 // ======================================================
 
 bot.on("text", async ctx => {
@@ -188,7 +188,7 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
+// ОБРАБОТКА ОТВЕТОВ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -196,25 +196,21 @@ bot.on("callback_query", async ctx => {
   const answer = ctx.callbackQuery.data;
 
   const u = usersCache[userId];
-
   if (!u || !u.waitingAnswer) return;
 
-  // Игнор выбора роли
   if (answer.startsWith("role_")) return;
 
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  // ============================
-  // ПРАВИЛЬНЫЙ ОТВЕТ
-  // ============================
+  // ======= ПРАВИЛЬНО =======
   if (answer === lesson.correct) {
 
     u.streak = (u.streak || 0) + 1;
-    u.points += 1;
+    u.points++;
 
     if (u.streak === 3) {
-      u.points += 1;
+      u.points++;
       u.streak = 0;
       await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
     }
@@ -228,7 +224,6 @@ bot.on("callback_query", async ctx => {
   } else {
 
     u.streak = 0;
-
     if (u.points > 0) u.points--;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
@@ -241,7 +236,34 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА УРОКОВ
+// РЕЙТИНГ
+// ======================================================
+
+bot.command("rating", async ctx => {
+  const snapshot = await db.collection("users").get();
+
+  let users = [];
+  snapshot.forEach(doc => {
+    const u = doc.data();
+    users.push({
+      name: u.name || "Без имени",
+      points: u.points || 0
+    });
+  });
+
+  users.sort((a, b) => b.points - a.points);
+  const top = users.slice(0, 10);
+
+  let text = "🏆 *Рейтинг участников:*\n\n";
+  top.forEach((u, i) => {
+    text += `${i + 1}) ${u.name} — *${u.points}*\n`;
+  });
+
+  ctx.replyWithMarkdown(text);
+});
+
+// ======================================================
+// АВТО-ОТПРАВКА
 // ======================================================
 
 setInterval(async () => {
@@ -267,12 +289,9 @@ setInterval(async () => {
 if (WEBHOOK_URL) {
   bot.telegram.setWebhook(WEBHOOK_URL);
   app.use(bot.webhookCallback("/telegram-webhook"));
-
   app.get("/", (_, res) => res.send("Bot is running"));
-
   app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
-  console.log("▶ Запуск POLLING");
   bot.launch();
 }
 
