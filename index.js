@@ -166,6 +166,7 @@ bot.on("text", async ctx => {
 // ======================================================
 
 bot.action("role_employee", async ctx => {
+  await ctx.answerCbQuery();
   const u = usersCache[ctx.from.id];
   u.role = "сотрудник";
   await saveUser(ctx.from.id, u);
@@ -175,6 +176,7 @@ bot.action("role_employee", async ctx => {
 });
 
 bot.action("role_client", async ctx => {
+  await ctx.answerCbQuery();
   const u = usersCache[ctx.from.id];
   u.role = "клиент";
   await saveUser(ctx.from.id, u);
@@ -184,7 +186,7 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// /rating
+// КОМАНДА: /rating
 // ======================================================
 
 bot.command("rating", async ctx => {
@@ -211,7 +213,7 @@ bot.command("rating", async ctx => {
 });
 
 // ======================================================
-// /itog
+// КОМАНДА: /itog
 // ======================================================
 
 bot.command("itog", async ctx => {
@@ -234,22 +236,25 @@ bot.command("itog", async ctx => {
 });
 
 // ======================================================
-// CALLBACKS — ОТВЕТЫ НА УРОКИ
+// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
+  await ctx.answerCbQuery();  // ← FIX: теперь bot НЕ будет игнорировать команды!
+
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
-  if (answer.startsWith("role_")) return;
-
   const u = usersCache[userId];
   if (!u || !u.waitingAnswer) return;
+
+  if (answer.startsWith("role_")) return;
 
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
+
     u.streak = (u.streak || 0) + 1;
     u.points++;
 
@@ -266,6 +271,7 @@ bot.on("callback_query", async ctx => {
     await logProgress(userId, u, "OK");
 
   } else {
+
     u.streak = 0;
     if (u.points > 0) u.points--;
 
@@ -279,7 +285,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА
+// АВТО-ОТПРАВКА УРОКОВ
 // ======================================================
 
 setInterval(async () => {
