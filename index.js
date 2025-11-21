@@ -45,11 +45,10 @@ const app = express();
 const tempUsers = {};
 const usersCache = {};
 
-// ID владельца бота (ТОЛЬКО он может слать новости как Техподдержка)
-const OWNER_ID = 123456789; // 🔴 ЗАМЕНИ на свой Telegram ID
+const OWNER_ID = 8097671685; // твой ID для /news
 
 // ======================================================
-// FIRESTORE ФУНКЦИИ
+// FIRESTORE
 // ======================================================
 
 async function loadUser(userId) {
@@ -120,11 +119,11 @@ bot.start(async ctx => {
 
   const saved = await loadUser(userId);
 
-  // Меню с кнопкой "Итог ⭐"
+  // Меню
   await ctx.reply(
     "Меню:",
     Markup.keyboard([
-      ["Итог ⭐"]
+      ["Итог ⭐", "Рейтинг 🏆"]
     ]).resize()
   );
 
@@ -138,7 +137,7 @@ bot.start(async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА КНОПКИ "Итог ⭐"
+// КНОПКА Итог ⭐
 // ======================================================
 
 bot.hears("Итог ⭐", async ctx => {
@@ -161,20 +160,47 @@ bot.hears("Итог ⭐", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /news — рассылка новости всем пользователям
+// КНОПКА Рейтинг 🏆
+// ======================================================
+
+bot.hears("Рейтинг 🏆", async ctx => {
+  const snapshot = await db.collection("users").get();
+
+  let users = [];
+  snapshot.forEach(doc => {
+    const u = doc.data();
+    users.push({
+      name: u.name || "Без имени",
+      points: u.points || 0
+    });
+  });
+
+  users.sort((a, b) => b.points - a.points);
+  const top = users.slice(0, 10);
+
+  if (top.length === 0) return ctx.reply("Рейтинг пока пуст.");
+
+  let text = "🏆 *ТОП-10 участников:*\n\n";
+  top.forEach((u, i) => {
+    text += `${i + 1}) *${u.name}* — ${u.points} баллов\n`;
+  });
+
+  ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
+// КОМАНДА /news — рассылка новости всем
 // ======================================================
 
 bot.command("news", async ctx => {
-  const fromId = ctx.from.id;
-
-  if (fromId !== 8097671685) {
-    return ctx.reply("❌ У вас нет прав отправлять новости как ТехПоддержка.");
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
   const text = ctx.message.text.split(" ").slice(1).join(" ").trim();
 
   if (!text) {
-    return ctx.reply("Напишите текст новости после команды, пример:\n/news Завтра новый урок будет в 10:00");
+    return ctx.reply("Напишите текст новости:\n/news Завтра важное обновление.");
   }
 
   const snapshot = await db.collection("users").get();
@@ -192,7 +218,7 @@ bot.command("news", async ctx => {
       );
       sent++;
     } catch (err) {
-      console.error("Ошибка отправки новости пользователю", uid, err.message);
+      console.error("Ошибка:", uid, err.message);
     }
   }
 
@@ -200,14 +226,12 @@ bot.command("news", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ТЕКСТОВОЙ РЕГИСТРАЦИИ
+// ТЕКСТОВАЯ РЕГИСТРАЦИЯ
 // ======================================================
 
 bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
-
-  // если это "Итог ⭐" — его уже обработал bot.hears выше, сюда не доходим
 
   if (tempUsers[userId]?.step === "name") {
     const userState = {
@@ -270,7 +294,6 @@ bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
-  // защита: если кликнули по role_ — эти кнопки уже обработаны выше
   if (answer.startsWith("role_")) return;
 
   const u = usersCache[userId] || (await loadUser(userId));
@@ -284,12 +307,12 @@ bot.on("callback_query", async ctx => {
     u.points = (u.points || 0) + 1;
 
     if (u.streak === 3) {
-      u.points += 1;
+      u.points++;
       u.streak = 0;
       await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
     }
 
-    u.currentLesson += 1;
+    u.currentLesson++;
     u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
@@ -297,11 +320,11 @@ bot.on("callback_query", async ctx => {
 
   } else {
     u.streak = 0;
-    if (u.points && u.points > 0) u.points -= 1;
+    if (u.points && u.points > 0) u.points--;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
 
-    await ctx.reply("❌ Ошибка. Балл снят. Этот же урок придёт через 30 минут.");
+    await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут попробуешь снова.");
     await logProgress(userId, u, "FAIL");
   }
 
@@ -309,7 +332,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА УРОКОВ
+// АВТО-ОТПРАВКА
 // ======================================================
 
 setInterval(async () => {
@@ -335,13 +358,10 @@ setInterval(async () => {
 if (WEBHOOK_URL) {
   bot.telegram.setWebhook(WEBHOOK_URL);
   app.use(bot.webhookCallback("/telegram-webhook"));
-
-  app.get("/", (_, res) => res.send("Bot is running"));
-
   app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
-  console.log("▶ Запуск POLLING");
   bot.launch();
+  console.log("▶ Запуск POLLING");
 }
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
