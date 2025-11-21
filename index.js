@@ -188,7 +188,58 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ
+// КОМАНДА: /rating
+// ======================================================
+
+bot.command("rating", async ctx => {
+  const snapshot = await db.collection("users").get();
+
+  let users = [];
+  snapshot.forEach(doc => {
+    const u = doc.data();
+    users.push({
+      name: u.name || "Без имени",
+      points: u.points || 0
+    });
+  });
+
+  users.sort((a, b) => b.points - a.points);
+  const top = users.slice(0, 10);
+
+  let text = "🏆 *Рейтинг участников:*\n\n";
+  top.forEach((u, i) => {
+    text += `${i + 1}) ${u.name} — *${u.points}*\n`;
+  });
+
+  ctx.replyWithMarkdown(text);
+});
+
+// ======================================================
+// КОМАНДА /itog
+// ======================================================
+
+bot.command("itog", async ctx => {
+  const userId = ctx.from.id;
+
+  let u = usersCache[userId];
+  if (!u) u = await loadUser(userId);
+  if (!u) return ctx.reply("Вы ещё не начали обучение. Нажмите /start");
+
+  let text = `
+📌 *Ваши итоги обучения:*
+
+👤 Имя: *${u.name}*
+🎭 Статус: *${u.role || "не выбран"}*
+📚 Урок: *${u.currentLesson} / 90*
+⭐ Баллы: *${u.points}*
+🔥 Серия правильных: *${u.streak || 0}*
+`;
+
+  ctx.replyWithMarkdown(text);
+});
+
+// ======================================================
+// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -203,7 +254,6 @@ bot.on("callback_query", async ctx => {
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  // ======= ПРАВИЛЬНО =======
   if (answer === lesson.correct) {
 
     u.streak = (u.streak || 0) + 1;
@@ -236,34 +286,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// РЕЙТИНГ
-// ======================================================
-
-bot.command("rating", async ctx => {
-  const snapshot = await db.collection("users").get();
-
-  let users = [];
-  snapshot.forEach(doc => {
-    const u = doc.data();
-    users.push({
-      name: u.name || "Без имени",
-      points: u.points || 0
-    });
-  });
-
-  users.sort((a, b) => b.points - a.points);
-  const top = users.slice(0, 10);
-
-  let text = "🏆 *Рейтинг участников:*\n\n";
-  top.forEach((u, i) => {
-    text += `${i + 1}) ${u.name} — *${u.points}*\n`;
-  });
-
-  ctx.replyWithMarkdown(text);
-});
-
-// ======================================================
-// АВТО-ОТПРАВКА
+// АВТО-ОТПРАВКА УРОКОВ
 // ======================================================
 
 setInterval(async () => {
