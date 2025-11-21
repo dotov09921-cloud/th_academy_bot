@@ -117,6 +117,14 @@ bot.start(async ctx => {
 
   const saved = await loadUser(userId);
 
+  // ⬇⬇⬇ ДОБАВИЛ МЕНЮ "Итог ⭐"
+  await ctx.reply(
+    "Меню:",
+    Markup.keyboard([
+      ["Итог ⭐"]
+    ]).resize()
+  );
+
   if (saved) {
     usersCache[userId] = saved;
     return ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение 📚`);
@@ -127,14 +135,36 @@ bot.start(async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
+// ОБРАБОТКА КНОПКИ "Итог ⭐"
+// ======================================================
+
+bot.hears("Итог ⭐", async ctx => {
+  const userId = ctx.from.id;
+  let u = usersCache[userId] || await loadUser(userId);
+
+  if (!u) return ctx.reply("Вы ещё не начали обучение. Нажмите /start");
+
+  let text = `
+📌 *Ваши итоги обучения:*
+
+👤 Имя: *${u.name}*
+🎭 Статус: *${u.role || "не выбран"}*
+📚 Урок: *${u.currentLesson} / 90*
+⭐ Баллы: *${u.points}*
+🔥 Серия правильных: *${u.streak || 0}*
+  `;
+
+  ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
+// ОБРАБОТКА ТЕКСТОВОЙ РЕГИСТРАЦИИ
 // ======================================================
 
 bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // регистрация — имя
   if (tempUsers[userId]?.step === "name") {
     const userState = {
       name: text,
@@ -143,6 +173,7 @@ bot.on("text", async ctx => {
       nextLessonAt: 0,
       lastLessonAt: 0,
       points: 0,
+      streak: 0
     };
 
     usersCache[userId] = userState;
@@ -165,33 +196,25 @@ bot.on("text", async ctx => {
 // ======================================================
 
 bot.action("role_employee", async ctx => {
-  const userId = ctx.from.id;
-  const u = usersCache[userId];
-
-  u.role = "сотрудник";   // <-- русский вариант
-  await saveUser(userId, u);
+  const u = usersCache[ctx.from.id];
+  u.role = "сотрудник";
+  await saveUser(ctx.from.id, u);
 
   await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
-  return sendLesson(userId, u.currentLesson);
+  return sendLesson(ctx.from.id, u.currentLesson);
 });
 
 bot.action("role_client", async ctx => {
-  const userId = ctx.from.id;
-  const u = usersCache[userId];
-
-  u.role = "клиент";       // <-- русский вариант
-  await saveUser(userId, u);
+  const u = usersCache[ctx.from.id];
+  u.role = "клиент";
+  await saveUser(ctx.from.id, u);
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
-  return sendLesson(userId, u.currentLesson);
+  return sendLesson(ctx.from.id, u.currentLesson);
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА КНОПКИ
-// ======================================================
-
-// ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА КНОПКИ
+// ОБРАБОТКА ОТВЕТОВ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -200,48 +223,31 @@ bot.on("callback_query", async ctx => {
 
   const u = usersCache[userId];
 
-  // игнорируем выбор роли (они уже обработаны в bot.action)
   if (answer.startsWith("role_")) return;
-
   if (!u || !u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  // ============================
-  //     ПРАВИЛЬНЫЙ ОТВЕТ
-  // ============================
   if (answer === lesson.correct) {
-
-    // streak — серия правильных подряд
     u.streak = (u.streak || 0) + 1;
+    u.points++;
 
-    // стандартный балл
-    u.points += 1;
-
-    // бонус за 3 подряд
     if (u.streak === 3) {
-      u.points += 1;
-      u.streak = 0; // → обнуляем, чтобы снова можно было получить бонус
+      u.points++;
+      u.streak = 0;
       await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
     }
 
-    u.currentLesson += 1;
+    u.currentLesson++;
     u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
 
   } else {
-
-    // ============================
-    //   НЕПРАВИЛЬНЫЙ ОТВЕТ
-    // ============================
-
-    // сбиваем streak
     u.streak = 0;
-
-    if (u.points > 0) u.points -= 1;
+    if (u.points > 0) u.points--;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
 
@@ -251,8 +257,6 @@ bot.on("callback_query", async ctx => {
 
   await saveUser(userId, u);
 });
-
-
 
 // ======================================================
 // АВТО-ОТПРАВКА УРОКОВ
