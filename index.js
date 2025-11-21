@@ -115,15 +115,15 @@ async function sendLesson(userId, lessonNumber) {
 bot.start(async ctx => {
   const userId = ctx.from.id;
 
-  const saved = await loadUser(userId);
-
-  // ⬇⬇⬇ ДОБАВИЛ МЕНЮ "Итог ⭐"
+  // МЕНЮ С КНОПКАМИ ↓↓↓
   await ctx.reply(
     "Меню:",
     Markup.keyboard([
-      ["Итог ⭐"]
+      ["Итог ⭐", "Рейтинг 🏆"]
     ]).resize()
   );
+
+  const saved = await loadUser(userId);
 
   if (saved) {
     usersCache[userId] = saved;
@@ -135,7 +135,7 @@ bot.start(async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА КНОПКИ "Итог ⭐"
+// КНОПКА «Итог ⭐»
 // ======================================================
 
 bot.hears("Итог ⭐", async ctx => {
@@ -152,13 +152,40 @@ bot.hears("Итог ⭐", async ctx => {
 📚 Урок: *${u.currentLesson} / 90*
 ⭐ Баллы: *${u.points}*
 🔥 Серия правильных: *${u.streak || 0}*
-  `;
+`;
 
   ctx.reply(text, { parse_mode: "Markdown" });
 });
 
 // ======================================================
-// ОБРАБОТКА ТЕКСТОВОЙ РЕГИСТРАЦИИ
+// КНОПКА «Рейтинг 🏆»
+// ======================================================
+
+bot.hears("Рейтинг 🏆", async ctx => {
+  const snapshot = await db.collection("users").get();
+
+  let users = [];
+  snapshot.forEach(doc => {
+    const u = doc.data();
+    users.push({
+      name: u.name || "Без имени",
+      points: u.points || 0
+    });
+  });
+
+  users.sort((a, b) => b.points - a.points);
+  const top = users.slice(0, 10);
+
+  let text = "🏆 *Топ-10 участников:*\n\n";
+  top.forEach((u, i) => {
+    text += `${i + 1}) ${u.name} — *${u.points}*\n`;
+  });
+
+  ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
+// ОБРАБОТКА ТЕКСТОВ (регистрация)
 // ======================================================
 
 bot.on("text", async ctx => {
@@ -166,6 +193,7 @@ bot.on("text", async ctx => {
   const text = ctx.message.text.trim();
 
   if (tempUsers[userId]?.step === "name") {
+
     const userState = {
       name: text,
       currentLesson: 1,
@@ -173,7 +201,8 @@ bot.on("text", async ctx => {
       nextLessonAt: 0,
       lastLessonAt: 0,
       points: 0,
-      streak: 0
+      streak: 0,
+      role: null
     };
 
     usersCache[userId] = userState;
@@ -185,7 +214,7 @@ bot.on("text", async ctx => {
       "Отлично! Теперь выбери свой статус:",
       Markup.inlineKeyboard([
         [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
-        [Markup.button.callback("🧑 Клиент", "role_client")],
+        [Markup.button.callback("🧑 Клиент", "role_client")]
       ])
     );
   }
@@ -214,7 +243,7 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ
+// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -230,6 +259,7 @@ bot.on("callback_query", async ctx => {
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
+
     u.streak = (u.streak || 0) + 1;
     u.points++;
 
@@ -240,18 +270,19 @@ bot.on("callback_query", async ctx => {
     }
 
     u.currentLesson++;
-    u.nextLessonAt = Date.now() + 10 * 1000;
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
 
   } else {
+
     u.streak = 0;
     if (u.points > 0) u.points--;
 
-    u.nextLessonAt = Date.now() + 10 * 1000;
+    u.nextLessonAt = Date.now() + 30 * 60 * 1000;
 
-    await ctx.reply("❌ Ошибка. Балл снят. Этот же урок придёт через 30 минут.");
+    await ctx.reply("❌ Ошибка. Балл снят. Повтор урока через 30 минут.");
     await logProgress(userId, u, "FAIL");
   }
 
@@ -259,7 +290,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА УРОКОВ
+// АВТО-ДЗ
 // ======================================================
 
 setInterval(async () => {
@@ -285,15 +316,10 @@ setInterval(async () => {
 if (WEBHOOK_URL) {
   bot.telegram.setWebhook(WEBHOOK_URL);
   app.use(bot.webhookCallback("/telegram-webhook"));
-
-  app.get("/", (_, res) => res.send("Bot is running"));
-
   app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
-  console.log("▶ Запуск POLLING");
   bot.launch();
 }
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-//ddd
