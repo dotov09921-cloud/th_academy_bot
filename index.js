@@ -134,15 +134,16 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // регистрация — имя
   if (tempUsers[userId]?.step === "name") {
     const userState = {
       name: text,
+      role: null,
       currentLesson: 1,
       waitingAnswer: false,
       nextLessonAt: 0,
       lastLessonAt: 0,
       points: 0,
+      streak: 0
     };
 
     usersCache[userId] = userState;
@@ -168,7 +169,7 @@ bot.action("role_employee", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId];
 
-  u.role = "сотрудник";   // <-- русский вариант
+  u.role = "сотрудник";
   await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
@@ -179,7 +180,7 @@ bot.action("role_client", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId];
 
-  u.role = "клиент";       // <-- русский вариант
+  u.role = "клиент";
   await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
@@ -187,11 +188,7 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА КНОПКИ
-// ======================================================
-
-// ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА КНОПКИ
+// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -200,33 +197,29 @@ bot.on("callback_query", async ctx => {
 
   const u = usersCache[userId];
 
-  // игнорируем выбор роли (они уже обработаны в bot.action)
-  if (answer.startsWith("role_")) return;
-
   if (!u || !u.waitingAnswer) return;
+
+  // Игнор выбора роли
+  if (answer.startsWith("role_")) return;
 
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
   // ============================
-  //     ПРАВИЛЬНЫЙ ОТВЕТ
+  // ПРАВИЛЬНЫЙ ОТВЕТ
   // ============================
   if (answer === lesson.correct) {
 
-    // streak — серия правильных подряд
     u.streak = (u.streak || 0) + 1;
-
-    // стандартный балл
     u.points += 1;
 
-    // бонус за 3 подряд
     if (u.streak === 3) {
       u.points += 1;
-      u.streak = 0; // → обнуляем, чтобы снова можно было получить бонус
+      u.streak = 0;
       await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
     }
 
-    u.currentLesson += 1;
+    u.currentLesson++;
     u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
@@ -234,14 +227,9 @@ bot.on("callback_query", async ctx => {
 
   } else {
 
-    // ============================
-    //   НЕПРАВИЛЬНЫЙ ОТВЕТ
-    // ============================
-
-    // сбиваем streak
     u.streak = 0;
 
-    if (u.points > 0) u.points -= 1;
+    if (u.points > 0) u.points--;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
 
@@ -251,8 +239,6 @@ bot.on("callback_query", async ctx => {
 
   await saveUser(userId, u);
 });
-
-
 
 // ======================================================
 // АВТО-ОТПРАВКА УРОКОВ
