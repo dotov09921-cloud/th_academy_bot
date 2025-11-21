@@ -127,22 +127,23 @@ bot.start(async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
+// ОБРАБОТКА ТЕКСТА
 // ======================================================
 
 bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // регистрация — имя
   if (tempUsers[userId]?.step === "name") {
     const userState = {
       name: text,
+      role: null,
       currentLesson: 1,
       waitingAnswer: false,
       nextLessonAt: 0,
       lastLessonAt: 0,
       points: 0,
+      streak: 0
     };
 
     usersCache[userId] = userState;
@@ -168,7 +169,7 @@ bot.action("role_employee", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId];
 
-  u.role = "сотрудник";   // <-- русский вариант
+  u.role = "сотрудник";
   await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
@@ -179,7 +180,7 @@ bot.action("role_client", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId];
 
-  u.role = "клиент";       // <-- русский вариант
+  u.role = "клиент";
   await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
@@ -187,11 +188,58 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА КНОПКИ
+// КОМАНДА: /rating
 // ======================================================
 
+bot.command("rating", async ctx => {
+  const snapshot = await db.collection("users").get();
+
+  let users = [];
+  snapshot.forEach(doc => {
+    const u = doc.data();
+    users.push({
+      name: u.name || "Без имени",
+      points: u.points || 0
+    });
+  });
+
+  users.sort((a, b) => b.points - a.points);
+  const top = users.slice(0, 10);
+
+  let text = "🏆 *Рейтинг участников:*\n\n";
+  top.forEach((u, i) => {
+    text += `${i + 1}) ${u.name} — *${u.points}*\n`;
+  });
+
+  return ctx.reply(text, { parse_mode: "Markdown" });
+});
+
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА КНОПКИ
+// КОМАНДА: /itog
+// ======================================================
+
+bot.command("itog", async ctx => {
+  const userId = ctx.from.id;
+
+  let u = usersCache[userId] || await loadUser(userId);
+
+  if (!u) return ctx.reply("Вы ещё не начали обучение. Нажмите /start");
+
+  let text = `
+📌 *Ваши итоги обучения:*
+
+👤 Имя: *${u.name}*
+🎭 Статус: *${u.role || "не выбран"}*
+📚 Урок: *${u.currentLesson} / 90*
+⭐ Баллы: *${u.points}*
+🔥 Серия правильных: *${u.streak || 0}*
+`;
+
+  return ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
+// CALLBACK — ОТВЕТЫ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -200,7 +248,6 @@ bot.on("callback_query", async ctx => {
 
   const u = usersCache[userId];
 
-  // игнорируем выбор роли (они уже обработаны в bot.action)
   if (answer.startsWith("role_")) return;
 
   if (!u || !u.waitingAnswer) return;
@@ -208,40 +255,25 @@ bot.on("callback_query", async ctx => {
   const lesson = lessons[u.currentLesson];
   u.waitingAnswer = false;
 
-  // ============================
-  //     ПРАВИЛЬНЫЙ ОТВЕТ
-  // ============================
   if (answer === lesson.correct) {
-
-    // streak — серия правильных подряд
     u.streak = (u.streak || 0) + 1;
+    u.points++;
 
-    // стандартный балл
-    u.points += 1;
-
-    // бонус за 3 подряд
     if (u.streak === 3) {
-      u.points += 1;
-      u.streak = 0; // → обнуляем, чтобы снова можно было получить бонус
+      u.points++;
+      u.streak = 0;
       await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
     }
 
-    u.currentLesson += 1;
+    u.currentLesson++;
     u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
 
   } else {
-
-    // ============================
-    //   НЕПРАВИЛЬНЫЙ ОТВЕТ
-    // ============================
-
-    // сбиваем streak
     u.streak = 0;
-
-    if (u.points > 0) u.points -= 1;
+    if (u.points > 0) u.points--;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
 
@@ -251,8 +283,6 @@ bot.on("callback_query", async ctx => {
 
   await saveUser(userId, u);
 });
-
-
 
 // ======================================================
 // АВТО-ОТПРАВКА УРОКОВ
@@ -281,9 +311,7 @@ setInterval(async () => {
 if (WEBHOOK_URL) {
   bot.telegram.setWebhook(WEBHOOK_URL);
   app.use(bot.webhookCallback("/telegram-webhook"));
-
   app.get("/", (_, res) => res.send("Bot is running"));
-
   app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
   console.log("▶ Запуск POLLING");
