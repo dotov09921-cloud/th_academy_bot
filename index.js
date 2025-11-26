@@ -354,6 +354,45 @@ bot.command("stats", async ctx => {
   ctx.reply(text, { parse_mode: "Markdown" });
 });
 
+
+// ======================================================
+// КОМАНДА /reset_all — полный сброс системы (ТОЛЬКО АДМИН)
+// ======================================================
+
+bot.command("reset_all", async ctx => {
+  if (ctx.from.id !== 8097671685) {
+    return ctx.reply("❌ У вас нет прав на полный сброс системы.");
+  }
+
+  try {
+    ctx.reply("⏳ Выполняю полный сброс Academy…");
+
+    // --- Удаляем пользователей ---
+    const usersSnap = await db.collection("users").get();
+    for (const doc of usersSnap.docs) {
+      await doc.ref.delete();
+    }
+
+    // --- Удаляем ошибки ---
+    const mistakesSnap = await db.collection("mistakes").get();
+    for (const doc of mistakesSnap.docs) {
+      await doc.ref.delete();
+    }
+
+    // --- Удаляем историю ответов ---
+    const progressSnap = await db.collection("progress").get();
+    for (const doc of progressSnap.docs) {
+      await doc.ref.delete();
+    }
+
+    ctx.reply("✔ Полный сброс завершён. Все lesson'ы теперь начнутся заново.");
+
+  } catch (err) {
+    console.error("Ошибка reset_all:", err);
+    ctx.reply("❌ Ошибка при сбросе. Подробности в серверной консоли.");
+  }
+});
+
 // ======================================================
 // ТЕКСТОВАЯ РЕГИСТРАЦИЯ
 // ======================================================
