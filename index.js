@@ -264,41 +264,52 @@ bot.command("mistakes", async ctx => {
     targetId = String(ctx.from.id);
   }
 
-  const userData = await loadUser(targetId);
+  try {
+    const userData = await loadUser(targetId);
 
-  if (!userData) {
-    return ctx.reply(`Пользователь с ID *${targetId}* не найден.`, { parse_mode: "Markdown" });
+    if (!userData) {
+      return ctx.reply(
+        `Пользователь с ID *${targetId}* не найден.`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    const correctCount = userData.correctCount || 0;
+    const wrongCount = userData.wrongCount || 0;
+    const totalAnswers = correctCount + wrongCount;
+    const percent = totalAnswers === 0 ? 0 : Math.round((correctCount / totalAnswers) * 100);
+
+    // без orderBy, просто последние 20 записей по условию
+    const snapshot = await db.collection("mistakes")
+      .where("userId", "==", String(targetId))
+      .limit(20)
+      .get();
+
+    if (snapshot.empty) {
+      return ctx.reply(
+        `У пользователя *${userData.name}* (ID ${targetId}) нет ошибок.`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    let text = `❌ *Ошибки пользователя ${userData.name}* (ID ${targetId}):\n\n`;
+    text += `Правильных: *${correctCount}*, ошибок: *${wrongCount}*, точность: *${percent}%*\n\n`;
+
+    snapshot.forEach(doc => {
+      const m = doc.data();
+      const date = new Date(m.ts).toLocaleString("ru-RU");
+      text += `📅 ${date}\n`;
+      text += `Урок ${m.lesson}\n`;
+      text += `Вопрос: ${m.question}\n`;
+      text += `Ответил: *${m.userAnswer}*\n`;
+      text += `Правильно: *${m.correctAnswer}*\n\n`;
+    });
+
+    ctx.reply(text, { parse_mode: "Markdown" });
+  } catch (err) {
+    console.error("Ошибка в /mistakes:", err);
+    ctx.reply("Произошла ошибка при загрузке ошибок. Проверь консоль сервера.");
   }
-
-  const correctCount = userData.correctCount || 0;
-  const wrongCount = userData.wrongCount || 0;
-  const totalAnswers = correctCount + wrongCount;
-  const percent = totalAnswers === 0 ? 0 : Math.round((correctCount / totalAnswers) * 100);
-
-  const snapshot = await db.collection("mistakes")
-    .where("userId", "==", String(targetId))
-    .orderBy("ts", "desc")
-    .limit(20)
-    .get();
-
-  if (snapshot.empty) {
-    return ctx.reply(`У пользователя *${userData.name}* (ID ${targetId}) нет ошибок.`, { parse_mode: "Markdown" });
-  }
-
-  let text = `❌ *Ошибки пользователя ${userData.name}* (ID ${targetId}):\n\n`;
-  text += `Правильных: *${correctCount}*, ошибок: *${wrongCount}*, точность: *${percent}%*\n\n`;
-
-  snapshot.forEach(doc => {
-    const m = doc.data();
-    const date = new Date(m.ts).toLocaleString("ru-RU");
-    text += `📅 ${date}\n`;
-    text += `Урок ${m.lesson}\n`;
-    text += `Вопрос: ${m.question}\n`;
-    text += `Ответил: *${m.userAnswer}*\n`;
-    text += `Правильно: *${m.correctAnswer}*\n\n`;
-  });
-
-  ctx.reply(text, { parse_mode: "Markdown" });
 });
 
 // ======================================================
@@ -414,7 +425,6 @@ bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
-  // если клик по выбору роли — пропускаем (они уже обработаны)
   if (answer.startsWith("role_")) return;
 
   const u = usersCache[userId] || (await loadUser(userId));
@@ -424,7 +434,6 @@ bot.on("callback_query", async ctx => {
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
-    // правильный ответ
     u.streak = (u.streak || 0) + 1;
     u.points = (u.points || 0) + 1;
     u.correctCount = (u.correctCount || 0) + 1;
@@ -442,7 +451,6 @@ bot.on("callback_query", async ctx => {
     await logProgress(userId, u, "OK");
 
   } else {
-    // неправильный ответ
     u.streak = 0;
     if (u.points && u.points > 0) u.points--;
     u.wrongCount = (u.wrongCount || 0) + 1;
