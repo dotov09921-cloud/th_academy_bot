@@ -215,7 +215,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 // ======================================================
 
 bot.command("news", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
@@ -248,24 +248,30 @@ bot.command("news", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /mistakes <userId> — ошибки пользователя (ТОЛЬКО АДМИН)
+// КОМАНДА /mistakes [userId] — ошибки пользователя (ТОЛЬКО АДМИН)
 // ======================================================
 
 bot.command("mistakes", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав просматривать ошибки.");
   }
 
   const args = ctx.message.text.split(" ").slice(1);
-  const targetId = args[0] ? args[0].trim() : null;
+  let targetId = args[0] ? args[0].trim() : null;
 
+  // если ID не указан → смотрим ошибки самого админа
   if (!targetId) {
-    return ctx.reply("Укажи ID пользователя:\n/mistakes 123456789");
+    targetId = String(ctx.from.id);
   }
 
   const userData = await loadUser(targetId);
-  const correctCount = userData?.correctCount || 0;
-  const wrongCount = userData?.wrongCount || 0;
+
+  if (!userData) {
+    return ctx.reply(`Пользователь с ID *${targetId}* не найден.`, { parse_mode: "Markdown" });
+  }
+
+  const correctCount = userData.correctCount || 0;
+  const wrongCount = userData.wrongCount || 0;
   const totalAnswers = correctCount + wrongCount;
   const percent = totalAnswers === 0 ? 0 : Math.round((correctCount / totalAnswers) * 100);
 
@@ -276,17 +282,17 @@ bot.command("mistakes", async ctx => {
     .get();
 
   if (snapshot.empty) {
-    return ctx.reply(`По пользователю ${targetId} нет ошибок.`);
+    return ctx.reply(`У пользователя *${userData.name}* (ID ${targetId}) нет ошибок.`, { parse_mode: "Markdown" });
   }
 
-  let text = `❌ *Ошибки пользователя ${targetId}:*\n\n`;
-  text += `Всего правильных: *${correctCount}*, ошибок: *${wrongCount}*, точность: *${percent}%*\n\n`;
+  let text = `❌ *Ошибки пользователя ${userData.name}* (ID ${targetId}):\n\n`;
+  text += `Правильных: *${correctCount}*, ошибок: *${wrongCount}*, точность: *${percent}%*\n\n`;
 
   snapshot.forEach(doc => {
     const m = doc.data();
     const date = new Date(m.ts).toLocaleString("ru-RU");
     text += `📅 ${date}\n`;
-    text += `Урок ${m.lesson}:\n`;
+    text += `Урок ${m.lesson}\n`;
     text += `Вопрос: ${m.question}\n`;
     text += `Ответил: *${m.userAnswer}*\n`;
     text += `Правильно: *${m.correctAnswer}*\n\n`;
@@ -300,7 +306,7 @@ bot.command("mistakes", async ctx => {
 // ======================================================
 
 bot.command("stats", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав просматривать статистику.");
   }
 
