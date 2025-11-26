@@ -45,7 +45,8 @@ const app = express();
 const tempUsers = {};
 const usersCache = {};
 
-const OWNER_ID = 8097671685; // твой ID для /news
+// 🔐 ТОЛЬКО этот ID имеет доступ к админ-командам
+const OWNER_ID = 8097671685; // твой ID
 
 // ======================================================
 // FIRESTORE
@@ -63,11 +64,23 @@ async function saveUser(userId, data) {
 
 async function logProgress(userId, state, result) {
   await db.collection("progress").add({
-    userId,
+    userId: String(userId),
     name: state.name,
     lesson: state.currentLesson,
     result,
     points: state.points,
+    ts: Date.now(),
+  });
+}
+
+// логируем конкретную ошибку (для админ-аналитики)
+async function logMistake(userId, lessonNumber, lesson, userAnswer) {
+  await db.collection("mistakes").add({
+    userId: String(userId),
+    lesson: lessonNumber,
+    question: lesson.question,
+    userAnswer,
+    correctAnswer: lesson.correct,
     ts: Date.now(),
   });
 }
@@ -84,11 +97,12 @@ async function sendLesson(userId, lessonNumber) {
     await bot.telegram.sendMessage(chatId, "🎉 Все 90 уроков пройдены! Молодец!");
 
     const u = usersCache[userId];
-    u.finished = true;
-    u.waitingAnswer = false;
-    u.nextLessonAt = null;
-
-    await saveUser(userId, u);
+    if (u) {
+      u.finished = true;
+      u.waitingAnswer = false;
+      u.nextLessonAt = null;
+      await saveUser(userId, u);
+    }
     return;
   }
 
@@ -102,7 +116,9 @@ async function sendLesson(userId, lessonNumber) {
     keyboard
   );
 
-  const u = usersCache[userId];
+  const u = usersCache[userId] || (await loadUser(userId));
+  if (!u) return;
+
   u.waitingAnswer = true;
   u.lastLessonAt = Date.now();
   u.nextLessonAt = 0;
@@ -146,6 +162,11 @@ bot.hears("Итог ⭐", async ctx => {
 
   if (!u) return ctx.reply("Вы ещё не начали обучение. Нажмите /start");
 
+  const totalCorrect = u.correctCount || 0;
+  const totalWrong = u.wrongCount || 0;
+  const totalAnswers = totalCorrect + totalWrong;
+  const percent = totalAnswers === 0 ? 0 : Math.round((totalCorrect / totalAnswers) * 100);
+
   const text = `
 📌 *Ваши итоги обучения:*
 
@@ -154,6 +175,7 @@ bot.hears("Итог ⭐", async ctx => {
 📚 Урок: *${u.currentLesson || 1} / 90*
 ⭐ Баллы: *${u.points || 0}*
 🔥 Серия правильных: *${u.streak || 0}*
+📈 Точность ответов: *${percent}%*  (правильных: ${totalCorrect}, ошибок: ${totalWrong})
   `;
 
   ctx.reply(text, { parse_mode: "Markdown" });
@@ -180,7 +202,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 
   if (top.length === 0) return ctx.reply("Рейтинг пока пуст.");
 
-  let text = "🏆 *ТОП-10 участников:*\n\n";
+  let text = "🏆 *ТОП-10 участников по баллам:*\n\n";
   top.forEach((u, i) => {
     text += `${i + 1}) *${u.name}* — ${u.points} баллов\n`;
   });
@@ -193,7 +215,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 // ======================================================
 
 bot.command("news", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
@@ -226,6 +248,96 @@ bot.command("news", async ctx => {
 });
 
 // ======================================================
+// КОМАНДА /mistakes <userId> — ошибки пользователя (ТОЛЬКО АДМИН)
+// ======================================================
+
+bot.command("mistakes", async ctx => {
+  if (ctx.from.id !== 8097671685) {
+    return ctx.reply("❌ У вас нет прав просматривать ошибки.");
+  }
+
+  const args = ctx.message.text.split(" ").slice(1);
+  const targetId = args[0] ? args[0].trim() : null;
+
+  if (!targetId) {
+    return ctx.reply("Укажи ID пользователя:\n/mistakes 123456789");
+  }
+
+  const userData = await loadUser(targetId);
+  const correctCount = userData?.correctCount || 0;
+  const wrongCount = userData?.wrongCount || 0;
+  const totalAnswers = correctCount + wrongCount;
+  const percent = totalAnswers === 0 ? 0 : Math.round((correctCount / totalAnswers) * 100);
+
+  const snapshot = await db.collection("mistakes")
+    .where("userId", "==", String(targetId))
+    .orderBy("ts", "desc")
+    .limit(20)
+    .get();
+
+  if (snapshot.empty) {
+    return ctx.reply(`По пользователю ${targetId} нет ошибок.`);
+  }
+
+  let text = `❌ *Ошибки пользователя ${targetId}:*\n\n`;
+  text += `Всего правильных: *${correctCount}*, ошибок: *${wrongCount}*, точность: *${percent}%*\n\n`;
+
+  snapshot.forEach(doc => {
+    const m = doc.data();
+    const date = new Date(m.ts).toLocaleString("ru-RU");
+    text += `📅 ${date}\n`;
+    text += `Урок ${m.lesson}:\n`;
+    text += `Вопрос: ${m.question}\n`;
+    text += `Ответил: *${m.userAnswer}*\n`;
+    text += `Правильно: *${m.correctAnswer}*\n\n`;
+  });
+
+  ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
+// КОМАНДА /stats — общая статистика по системе (ТОЛЬКО АДМИН)
+// ======================================================
+
+bot.command("stats", async ctx => {
+  if (ctx.from.id !== 8097671685) {
+    return ctx.reply("❌ У вас нет прав просматривать статистику.");
+  }
+
+  const snapshot = await db.collection("users").get();
+
+  let totalCorrect = 0;
+  let totalWrong = 0;
+  let usersCount = 0;
+
+  snapshot.forEach(doc => {
+    const u = doc.data();
+    totalCorrect += u.correctCount || 0;
+    totalWrong += u.wrongCount || 0;
+    usersCount++;
+  });
+
+  const totalAnswers = totalCorrect + totalWrong;
+  const percent =
+    totalAnswers === 0 ? 0 : Math.round((totalCorrect / totalAnswers) * 100);
+
+  const text = `
+📊 *Общая статистика Technocolor Academy:*
+
+👥 Участников: *${usersCount}*
+
+🟢 Правильных ответов: *${totalCorrect}*
+🔴 Неправильных ответов: *${totalWrong}*
+
+📌 Всего ответов: *${totalAnswers}*
+
+⭐ *Средний процент правильных по системе: ${percent}%*
+`;
+
+  ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
 // ТЕКСТОВАЯ РЕГИСТРАЦИЯ
 // ======================================================
 
@@ -243,6 +355,8 @@ bot.on("text", async ctx => {
       points: 0,
       streak: 0,
       role: null,
+      correctCount: 0,
+      wrongCount: 0,
     };
 
     usersCache[userId] = userState;
@@ -294,6 +408,7 @@ bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
+  // если клик по выбору роли — пропускаем (они уже обработаны)
   if (answer.startsWith("role_")) return;
 
   const u = usersCache[userId] || (await loadUser(userId));
@@ -303,8 +418,10 @@ bot.on("callback_query", async ctx => {
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
+    // правильный ответ
     u.streak = (u.streak || 0) + 1;
     u.points = (u.points || 0) + 1;
+    u.correctCount = (u.correctCount || 0) + 1;
 
     if (u.streak === 3) {
       u.points++;
@@ -319,13 +436,16 @@ bot.on("callback_query", async ctx => {
     await logProgress(userId, u, "OK");
 
   } else {
+    // неправильный ответ
     u.streak = 0;
     if (u.points && u.points > 0) u.points--;
+    u.wrongCount = (u.wrongCount || 0) + 1;
 
     u.nextLessonAt = Date.now() + 10 * 1000;
 
     await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут попробуешь снова.");
     await logProgress(userId, u, "FAIL");
+    await logMistake(userId, u.currentLesson, lesson, answer);
   }
 
   await saveUser(userId, u);
@@ -366,5 +486,3 @@ if (WEBHOOK_URL) {
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-
-// hh
