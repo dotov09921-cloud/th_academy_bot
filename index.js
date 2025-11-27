@@ -3,7 +3,11 @@ const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
+const PDFDocument = require('pdfkit');   // <— для PDF
+const fs = require('fs');                // <— для временного файла
+const path = require('path');            // <— безопасные пути
 const lessons = require('./lessons');
+
 // ======================================================
 // FIREBASE
 // ======================================================
@@ -118,7 +122,7 @@ async function logMistake(userId, lessonNumber, lesson, userAnswer) {
 }
 
 // ======================================================
-// ОТПРАВКА УРОКА (НОВЫЙ)
+// ОТПРАВКА УРОКА
 // ======================================================
 
 async function sendLesson(userId, lessonNumber) {
@@ -163,7 +167,6 @@ async function sendLesson(userId, lessonNumber) {
 // ======================================================
 
 async function resendCurrentQuestion(ctx, u) {
-  // защита: если нет активного вопроса — ничего не делаем
   if (!u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
@@ -180,31 +183,27 @@ async function resendCurrentQuestion(ctx, u) {
 }
 
 // ======================================================
-// ОБЩИЙ ОБРАБОТЧИК СТАРТА (/start и "▶️ Старт")
+// ОБЩИЙ ОБРАБОТЧИК СТАРТА
 // ======================================================
 
 async function handleStart(ctx) {
   const userId = ctx.from.id;
   const saved = await loadUser(userId);
 
-  // Всегда показываем основное меню
   await ctx.reply("Меню:", mainKeyboard);
 
   if (saved && saved.verified) {
     usersCache[userId] = saved;
 
-    // Если у пользователя уже "висит" вопрос — просто дублируем его
     if (saved.waitingAnswer) {
       await ctx.reply("У тебя уже есть активный вопрос. Дублирую его 👇");
       await resendCurrentQuestion(ctx, saved);
       return;
     }
 
-    // Если активного вопроса нет — просто приветствие, ждём авто-урок по расписанию
     return ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение 📚`);
   }
 
-  // Если не зарегистрирован / не верифицирован — запускаем регистрацию
   tempUsers[userId] = { step: "name" };
   ctx.reply("Привет! Напиши своё имя:");
 }
@@ -280,7 +279,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 // ======================================================
 
 bot.command("news", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
@@ -299,39 +298,27 @@ bot.command("news", async ctx => {
 
     try {
       if (replied) {
-        // ---- ФОТО ----
         if (replied.photo) {
           const fileId = replied.photo[replied.photo.length - 1].file_id;
           await ctx.telegram.sendPhoto(uid, fileId, { caption: args || "" });
-        }
-
-        // ---- ВИДЕО ----
-        else if (replied.video) {
+        } else if (replied.video) {
           await ctx.telegram.sendVideo(uid, replied.video.file_id, { caption: args || "" });
-        }
-
-        // ---- ДОКУМЕНТ ----
-        else if (replied.document) {
+        } else if (replied.document) {
           await ctx.telegram.sendDocument(uid, replied.document.file_id, { caption: args || "" });
-        }
-
-        // ---- ГОЛОСОВОЕ ----
-        else if (replied.voice) {
+        } else if (replied.voice) {
           await ctx.telegram.sendVoice(uid, replied.voice.file_id, { caption: args || "" });
-        }
-
-        // ---- ТЕКСТ ----
-        else if (replied.text) {
+        } else if (replied.text) {
           await ctx.telegram.sendMessage(uid, replied.text + "\n\n" + args);
         }
-
       } else {
-        // только текст
-        await ctx.telegram.sendMessage(uid, `🛠 *Техподдержка*\n\n${args}`, { parse_mode: "Markdown" });
+        await ctx.telegram.sendMessage(
+          uid,
+          `🛠 *Техподдержка*\n\n${args}`,
+          { parse_mode: "Markdown" }
+        );
       }
 
       sent++;
-
     } catch (err) {
       console.error("Ошибка отправки пользователю", uid, err.message);
     }
@@ -345,7 +332,7 @@ bot.command("news", async ctx => {
 // ======================================================
 
 bot.command("mistakes", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав просматривать ошибки.");
   }
 
@@ -408,7 +395,7 @@ bot.command("mistakes", async ctx => {
 // ======================================================
 
 bot.command("stats", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав просматривать статистику.");
   }
 
@@ -446,11 +433,74 @@ bot.command("stats", async ctx => {
 });
 
 // ======================================================
+// КОМАНДА /pdf30 — PDF-отчёт за 30 дней (ТОЛЬКО АДМИН)
+// ======================================================
+
+bot.command("pdf30", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав на просмотр отчёта.");
+  }
+
+  try {
+    ctx.reply("⏳ Готовлю PDF-отчёт за последние 30 дней…");
+
+    const filePath = path.join(__dirname, "report_30days.pdf");
+    const doc = new PDFDocument();
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+
+    doc.fontSize(22).text("📊 Technocolor Academy", { align: "center" });
+    doc.moveDown();
+    doc.fontSize(18).text("Отчёт за последние 30 дней", { align: "center" });
+    doc.moveDown(2);
+
+    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+    const progressSnap = await db.collection("progress")
+      .where("ts", ">", since)
+      .get();
+
+    let totalOK = 0;
+    let totalFAIL = 0;
+
+    progressSnap.forEach(p => {
+      const data = p.data();
+      if (data.result === "OK") totalOK++;
+      else totalFAIL++;
+    });
+
+    const total = totalOK + totalFAIL;
+    const percent = total === 0 ? 0 : Math.round((totalOK / total) * 100);
+
+    doc.fontSize(14).text(`Всего ответов: ${total}`);
+    doc.text(`Правильных: ${totalOK}`);
+    doc.text(`Ошибок: ${totalFAIL}`);
+    doc.text(`Точность: ${percent}%`);
+    doc.moveDown(2);
+
+    doc.text("Отчёт сформирован автоматически системой Technocolor Academy.");
+    doc.end();
+
+    stream.on("finish", async () => {
+      await ctx.replyWithDocument({
+        source: filePath,
+        filename: "report_30days.pdf"
+      });
+      fs.unlinkSync(filePath);
+    });
+
+  } catch (err) {
+    console.error("Ошибка PDF:", err);
+    ctx.reply("❌ Ошибка при создании PDF. Подробности в логах Render.");
+  }
+});
+
+// ======================================================
 // КОМАНДА /reset_all — полный сброс (ТОЛЬКО АДМИН)
 // ======================================================
 
 bot.command("reset_all", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав на полный сброс системы.");
   }
 
@@ -487,7 +537,6 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // 1) проверка СМС-кода
   if (tempUsers[userId]?.step === "verify") {
     const correctCode = tempUsers[userId].code;
 
@@ -526,7 +575,6 @@ bot.on("text", async ctx => {
     }
   }
 
-  // 2) ввод имени
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
@@ -538,8 +586,6 @@ bot.on("text", async ctx => {
       ]).resize()
     );
   }
-
-  // остальные текстовые сообщения не трогаем
 });
 
 // ======================================================
@@ -655,72 +701,6 @@ setInterval(async () => {
     await sendLesson(userId, u.currentLesson);
   }
 }, 20000);
-
-const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
-
-bot.command("pdf30", async ctx => {
-  if (ctx.from.id !== 8097671685) {
-    return ctx.reply("❌ У вас нет прав.");
-  }
-
-  try {
-    ctx.reply("Готовлю PDF-отчёт…");
-
-    // 1. Путь для временного файла
-    const filePath = path.join(__dirname, "report_30days.pdf");
-
-    // 2. Создаём PDF
-    const doc = new PDFDocument();
-    const stream = fs.createWriteStream(filePath);
-    doc.pipe(stream);
-
-    // Заголовок
-    doc.fontSize(22).text("📊 Отчёт за последние 30 дней", { align: "center" });
-    doc.moveDown();
-
-    // Сбор данных
-    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const progressSnap = await db.collection("progress")
-      .where("ts", ">", since)
-      .get();
-
-    let totalOK = 0;
-    let totalFail = 0;
-
-    progressSnap.forEach(docSnap => {
-      const p = docSnap.data();
-      if (p.result === "OK") totalOK++;
-      else totalFail++;
-    });
-
-    const total = totalOK + totalFail;
-    const percent = total === 0 ? 0 : Math.round((totalOK / total) * 100);
-
-    doc.fontSize(14).text(`Всего ответов: ${total}`);
-    doc.text(`Правильных: ${totalOK}`);
-    doc.text(`Ошибок: ${totalFail}`);
-    doc.text(`Точность: ${percent}%`);
-    doc.moveDown();
-
-    doc.text("Отчёт создан автоматически системой Technocolor Academy.");
-
-    doc.end();
-
-    // 3. Ждём окончания записи файла
-    stream.on("finish", async () => {
-      await ctx.replyWithDocument({ source: filePath });
-
-      // 4. Удаляем файл после отправки
-      fs.unlinkSync(filePath);
-    });
-
-  } catch (err) {
-    console.error("Ошибка PDF:", err);
-    ctx.reply("❌ Ошибка при создании PDF");
-  }
-});
 
 // ======================================================
 // WEBHOOK / POLLING
