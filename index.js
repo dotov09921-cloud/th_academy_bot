@@ -282,7 +282,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 // ======================================================
 
 bot.command("news", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
@@ -347,7 +347,7 @@ bot.command("news", async ctx => {
 // ======================================================
 
 bot.command("mistakes", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ У вас нет прав просматривать ошибки.");
   }
 
@@ -410,7 +410,7 @@ bot.command("mistakes", async ctx => {
 // ======================================================
 
 bot.command("pdf30", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ Нет прав.");
   }
 
@@ -502,7 +502,7 @@ bot.command("pdf30", async ctx => {
 // ======================================================
 
 bot.command("stats", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ У вас нет прав просматривать статистику.");
   }
 
@@ -544,7 +544,7 @@ bot.command("stats", async ctx => {
 // ======================================================
 
 bot.command("reset_all", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ У вас нет прав на полный сброс системы.");
   }
 
