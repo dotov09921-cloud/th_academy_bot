@@ -277,7 +277,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /news — рассылка новости всем
+// КОМАНДА /news — поддержка медиа через reply (ТОЛЬКО АДМИН)
 // ======================================================
 
 bot.command("news", async ctx => {
@@ -285,32 +285,60 @@ bot.command("news", async ctx => {
     return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
-  const text = ctx.message.text.split(" ").slice(1).join(" ").trim();
+  const args = ctx.message.text.split(" ").slice(1).join(" ").trim();
+  const replied = ctx.message.reply_to_message;
 
-  if (!text) {
-    return ctx.reply("Напишите текст новости:\n/news Завтра важное обновление.");
+  if (!args && !replied) {
+    return ctx.reply("Отправьте фото/видео/документ, затем ответьте на него:\n/news Текст новости");
   }
 
   const snapshot = await db.collection("users").get();
-
   let sent = 0;
 
   for (const doc of snapshot.docs) {
-    const uid = doc.id;
+    const uid = Number(doc.id);
 
     try {
-      await bot.telegram.sendMessage(
-        Number(uid),
-        `🛠 *Техподдержка*\n\n${text}`,
-        { parse_mode: "Markdown" }
-      );
+      if (replied) {
+        // ---- ФОТО ----
+        if (replied.photo) {
+          const fileId = replied.photo[replied.photo.length - 1].file_id;
+          await ctx.telegram.sendPhoto(uid, fileId, { caption: args || "" });
+        }
+
+        // ---- ВИДЕО ----
+        else if (replied.video) {
+          await ctx.telegram.sendVideo(uid, replied.video.file_id, { caption: args || "" });
+        }
+
+        // ---- ДОКУМЕНТ ----
+        else if (replied.document) {
+          await ctx.telegram.sendDocument(uid, replied.document.file_id, { caption: args || "" });
+        }
+
+        // ---- ГОЛОСОВОЕ ----
+        else if (replied.voice) {
+          await ctx.telegram.sendVoice(uid, replied.voice.file_id, { caption: args || "" });
+        }
+
+        // ---- ТЕКСТ ----
+        else if (replied.text) {
+          await ctx.telegram.sendMessage(uid, replied.text + "\n\n" + args);
+        }
+
+      } else {
+        // только текст
+        await ctx.telegram.sendMessage(uid, `🛠 *Техподдержка*\n\n${args}`, { parse_mode: "Markdown" });
+      }
+
       sent++;
+
     } catch (err) {
-      console.error("Ошибка:", uid, err.message);
+      console.error("Ошибка отправки пользователю", uid, err.message);
     }
   }
 
-  ctx.reply(`✔ Новость отправлена ${sent} пользователям.`);
+  ctx.reply(`✔ Новость отправлена: ${sent} пользователям.`);
 });
 
 // ======================================================
