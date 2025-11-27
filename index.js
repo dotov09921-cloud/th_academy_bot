@@ -661,7 +661,7 @@ const fs = require('fs');
 const path = require('path');
 
 bot.command("pdf30", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
+  if (ctx.from.id !== 8097671685) {
     return ctx.reply("❌ У вас нет прав.");
   }
 
