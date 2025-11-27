@@ -4,7 +4,7 @@ const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const lessons = require('./lessons');
-const { createPDF } = require('./utils/pdfReport');
+const { createPDF } = require('./utils/utils/pdfReport');
 
 // ======================================================
 // FIREBASE
@@ -486,7 +486,7 @@ bot.command("pdf30", async ctx => {
     errors
   };
 
-  const { createPDF } = require('./utils/pdfReport');
+  const { createPDF } = require('./utils/utils/pdfReport');
   const path = require('path');
   const filePath = path.join(__dirname, "report_30days.pdf");
 
@@ -749,6 +749,72 @@ setInterval(async () => {
     await sendLesson(userId, u.currentLesson);
   }
 }, 20000);
+
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
+
+bot.command("pdf30", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав.");
+  }
+
+  try {
+    ctx.reply("Готовлю PDF-отчёт…");
+
+    // 1. Путь для временного файла
+    const filePath = path.join(__dirname, "report_30days.pdf");
+
+    // 2. Создаём PDF
+    const doc = new PDFDocument();
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+
+    // Заголовок
+    doc.fontSize(22).text("📊 Отчёт за последние 30 дней", { align: "center" });
+    doc.moveDown();
+
+    // Сбор данных
+    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const progressSnap = await db.collection("progress")
+      .where("ts", ">", since)
+      .get();
+
+    let totalOK = 0;
+    let totalFail = 0;
+
+    progressSnap.forEach(docSnap => {
+      const p = docSnap.data();
+      if (p.result === "OK") totalOK++;
+      else totalFail++;
+    });
+
+    const total = totalOK + totalFail;
+    const percent = total === 0 ? 0 : Math.round((totalOK / total) * 100);
+
+    doc.fontSize(14).text(`Всего ответов: ${total}`);
+    doc.text(`Правильных: ${totalOK}`);
+    doc.text(`Ошибок: ${totalFail}`);
+    doc.text(`Точность: ${percent}%`);
+    doc.moveDown();
+
+    doc.text("Отчёт создан автоматически системой Technocolor Academy.");
+
+    doc.end();
+
+    // 3. Ждём окончания записи файла
+    stream.on("finish", async () => {
+      await ctx.replyWithDocument({ source: filePath });
+
+      // 4. Удаляем файл после отправки
+      fs.unlinkSync(filePath);
+    });
+
+  } catch (err) {
+    console.error("Ошибка PDF:", err);
+    ctx.reply("❌ Ошибка при создании PDF");
+  }
+});
 
 // ======================================================
 // WEBHOOK / POLLING
