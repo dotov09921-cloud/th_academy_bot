@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
+const axios = require('axios');              // <— добавили
 const lessons = require('./lessons');
 
 // ======================================================
@@ -47,6 +48,34 @@ const usersCache = {};
 
 // 🔐 ТОЛЬКО этот ID имеет доступ к админ-командам
 const OWNER_ID = 8097671685; // твой ID
+
+// ======================================================
+// SMS.RU
+// ======================================================
+
+async function sendSmsCode(phone, code) {
+  try {
+    const apiId = process.env.SMS_API_ID;
+    if (!apiId) {
+      console.error("❌ Нет SMS_API_ID в .env");
+      return null;
+    }
+
+    // sms.ru ждёт номер без пробелов, можно в формате 79...
+    const cleanPhone = phone.replace(/[^\d]/g, '');
+
+    const url = `https://sms.ru/sms/send?api_id=${apiId}&to=${cleanPhone}&msg=${encodeURIComponent(
+      'Ваш код подтверждения: ' + code
+    )}&json=1`;
+
+    const res = await axios.get(url);
+    console.log("Ответ SMS.ru:", res.data);
+    return res.data;
+  } catch (err) {
+    console.error("Ошибка отправки СМС:", err.message);
+    return null;
+  }
+}
 
 // ======================================================
 // FIRESTORE
@@ -143,11 +172,12 @@ bot.start(async ctx => {
     ]).resize()
   );
 
-  if (saved) {
+  if (saved && saved.verified) {
     usersCache[userId] = saved;
     return ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение 📚`);
   }
 
+  // если старый пользователь без verified — всё равно отправим на регистрацию по новой
   tempUsers[userId] = { step: "name" };
   ctx.reply("Привет! Напиши своё имя:");
 });
@@ -160,7 +190,7 @@ bot.hears("Итог ⭐", async ctx => {
   const userId = ctx.from.id;
   let u = usersCache[userId] || await loadUser(userId);
 
-  if (!u) return ctx.reply("Вы ещё не начали обучение. Нажмите /start");
+  if (!u || !u.verified) return ctx.reply("Вы ещё не прошли регистрацию. Нажмите /start");
 
   const totalCorrect = u.correctCount || 0;
   const totalWrong = u.wrongCount || 0;
@@ -171,6 +201,7 @@ bot.hears("Итог ⭐", async ctx => {
 📌 *Ваши итоги обучения:*
 
 👤 Имя: *${u.name}*
+📱 Телефон: *${u.phone || "-"}*
 🎭 Статус: *${u.role || "не выбран"}*
 📚 Урок: *${u.currentLesson || 1} / 90*
 ⭐ Баллы: *${u.points || 0}*
@@ -215,7 +246,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 // ======================================================
 
 bot.command("news", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав отправлять новости.");
   }
 
@@ -252,7 +283,7 @@ bot.command("news", async ctx => {
 // ======================================================
 
 bot.command("mistakes", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав просматривать ошибки.");
   }
 
@@ -279,7 +310,6 @@ bot.command("mistakes", async ctx => {
     const totalAnswers = correctCount + wrongCount;
     const percent = totalAnswers === 0 ? 0 : Math.round((correctCount / totalAnswers) * 100);
 
-    // без orderBy, просто последние 20 записей по условию
     const snapshot = await db.collection("mistakes")
       .where("userId", "==", String(targetId))
       .limit(20)
@@ -317,7 +347,7 @@ bot.command("mistakes", async ctx => {
 // ======================================================
 
 bot.command("stats", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав просматривать статистику.");
   }
 
@@ -354,32 +384,28 @@ bot.command("stats", async ctx => {
   ctx.reply(text, { parse_mode: "Markdown" });
 });
 
-
 // ======================================================
 // КОМАНДА /reset_all — полный сброс системы (ТОЛЬКО АДМИН)
 // ======================================================
 
 bot.command("reset_all", async ctx => {
-  if (ctx.from.id !== 8097671685) {
+  if (ctx.from.id !== OWNER_ID) {
     return ctx.reply("❌ У вас нет прав на полный сброс системы.");
   }
 
   try {
     ctx.reply("⏳ Выполняю полный сброс Academy…");
 
-    // --- Удаляем пользователей ---
     const usersSnap = await db.collection("users").get();
     for (const doc of usersSnap.docs) {
       await doc.ref.delete();
     }
 
-    // --- Удаляем ошибки ---
     const mistakesSnap = await db.collection("mistakes").get();
     for (const doc of mistakesSnap.docs) {
       await doc.ref.delete();
     }
 
-    // --- Удаляем историю ответов ---
     const progressSnap = await db.collection("progress").get();
     for (const doc of progressSnap.docs) {
       await doc.ref.delete();
@@ -394,40 +420,87 @@ bot.command("reset_all", async ctx => {
 });
 
 // ======================================================
-// ТЕКСТОВАЯ РЕГИСТРАЦИЯ
+// ТЕКСТ + ВЕРИФИКАЦИЯ КОДА
 // ======================================================
 
 bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
+  // 1) проверка СМС-кода
+  if (tempUsers[userId]?.step === "verify") {
+    const correctCode = tempUsers[userId].code;
+
+    if (text === String(correctCode)) {
+      const tmp = tempUsers[userId];
+
+      const userState = {
+        name: tmp.name,
+        phone: tmp.phone,
+        verified: true,
+        currentLesson: 1,
+        waitingAnswer: false,
+        nextLessonAt: 0,
+        lastLessonAt: 0,
+        points: 0,
+        streak: 0,
+        role: null,
+        correctCount: 0,
+        wrongCount: 0,
+      };
+
+      await saveUser(userId, userState);
+      usersCache[userId] = userState;
+
+      delete tempUsers[userId];
+
+      return ctx.reply(
+        "Телефон подтверждён ✅\nТеперь выбери свой статус:",
+        Markup.inlineKeyboard([
+          [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
+          [Markup.button.callback("🧑 Клиент", "role_client")],
+        ])
+      );
+    } else {
+      return ctx.reply("❌ Неверный код. Попробуйте ещё раз:");
+    }
+  }
+
+  // 2) ввод имени
   if (tempUsers[userId]?.step === "name") {
-    const userState = {
-      name: text,
-      currentLesson: 1,
-      waitingAnswer: false,
-      nextLessonAt: 0,
-      lastLessonAt: 0,
-      points: 0,
-      streak: 0,
-      role: null,
-      correctCount: 0,
-      wrongCount: 0,
-    };
-
-    usersCache[userId] = userState;
-    await saveUser(userId, userState);
-
-    tempUsers[userId] = { step: "role" };
+    tempUsers[userId].name = text;
+    tempUsers[userId].step = "phone";
 
     return ctx.reply(
-      "Отлично! Теперь выбери свой статус:",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
-        [Markup.button.callback("🧑 Клиент", "role_client")],
-      ])
+      "Теперь отправь свой номер телефона 👇",
+      Markup.keyboard([
+        Markup.button.contactRequest("Отправить номер 📱")
+      ]).resize()
     );
   }
+
+  // все остальные текстовые сообщения здесь не обрабатываем
+});
+
+// ======================================================
+// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА)
+// ======================================================
+
+bot.on("contact", async ctx => {
+  const userId = ctx.from.id;
+
+  if (tempUsers[userId]?.step !== "phone") return;
+
+  const phone = ctx.message.contact.phone_number;
+  tempUsers[userId].phone = phone;
+
+  const code = Math.floor(1000 + Math.random() * 9000); // 4 цифры
+  tempUsers[userId].code = code;
+  tempUsers[userId].step = "verify";
+
+  await sendSmsCode(phone, code);
+
+  return ctx.reply("Мы отправили вам СМС с кодом. Введите код из сообщения:");
 });
 
 // ======================================================
@@ -534,7 +607,7 @@ if (WEBHOOK_URL) {
   app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
   bot.launch();
-  console.log("▶ Запуск POLLING");
+  console.log("▶️ Запуск POLLING");
 }
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
