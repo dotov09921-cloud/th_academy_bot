@@ -4,8 +4,6 @@ const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const lessons = require('./lessons');
-const { createPDF } = require('./utils/utils/pdfReport');
-
 // ======================================================
 // FIREBASE
 // ======================================================
