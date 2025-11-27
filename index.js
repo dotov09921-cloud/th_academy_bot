@@ -2,7 +2,7 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
-const axios = require('axios');              // <— добавили
+const axios = require('axios');
 const lessons = require('./lessons');
 
 // ======================================================
@@ -39,6 +39,12 @@ if (!BOT_TOKEN) throw new Error("Нет BOT_TOKEN");
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
 
+// Главная клавиатура (добавили ▶️ Старт)
+const mainKeyboard = Markup.keyboard([
+  ["▶️ Старт"],
+  ["Итог ⭐", "Рейтинг 🏆"]
+]).resize();
+
 // ======================================================
 // ВРЕМЕННЫЕ ХРАНИЛИЩА
 // ======================================================
@@ -47,7 +53,7 @@ const tempUsers = {};
 const usersCache = {};
 
 // 🔐 ТОЛЬКО этот ID имеет доступ к админ-командам
-const OWNER_ID = 8097671685; // твой ID
+const OWNER_ID = 8097671685;
 
 // ======================================================
 // SMS.RU
@@ -61,7 +67,6 @@ async function sendSmsCode(phone, code) {
       return null;
     }
 
-    // sms.ru ждёт номер без пробелов, можно в формате 79...
     const cleanPhone = phone.replace(/[^\d]/g, '');
 
     const url = `https://sms.ru/sms/send?api_id=${apiId}&to=${cleanPhone}&msg=${encodeURIComponent(
@@ -102,7 +107,6 @@ async function logProgress(userId, state, result) {
   });
 }
 
-// логируем конкретную ошибку (для админ-аналитики)
 async function logMistake(userId, lessonNumber, lesson, userAnswer) {
   await db.collection("mistakes").add({
     userId: String(userId),
@@ -156,31 +160,33 @@ async function sendLesson(userId, lessonNumber) {
 }
 
 // ======================================================
-// /start
+// ОБЩИЙ ОБРАБОТЧИК СТАРТА (используется и /start, и кнопкой)
 // ======================================================
 
-bot.start(async ctx => {
+async function handleStart(ctx) {
   const userId = ctx.from.id;
-
   const saved = await loadUser(userId);
 
-  // Меню
-  await ctx.reply(
-    "Меню:",
-    Markup.keyboard([
-      ["Итог ⭐", "Рейтинг 🏆"]
-    ]).resize()
-  );
+  // Показать главное меню с кнопкой Старт / Итог / Рейтинг
+  await ctx.reply("Меню:", mainKeyboard);
 
+  // Если уже верифицирован — просто продолжаем обучение
   if (saved && saved.verified) {
     usersCache[userId] = saved;
     return ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение 📚`);
   }
 
-  // если старый пользователь без verified — всё равно отправим на регистрацию по новой
+  // Иначе запускаем регистрацию с нуля (имя -> телефон -> СМС)
   tempUsers[userId] = { step: "name" };
   ctx.reply("Привет! Напиши своё имя:");
-});
+}
+
+// ======================================================
+// /start и кнопка "▶️ Старт"
+// ======================================================
+
+bot.start(handleStart);
+bot.hears("▶️ Старт", handleStart);
 
 // ======================================================
 // КНОПКА Итог ⭐
@@ -190,7 +196,7 @@ bot.hears("Итог ⭐", async ctx => {
   const userId = ctx.from.id;
   let u = usersCache[userId] || await loadUser(userId);
 
-  if (!u || !u.verified) return ctx.reply("Вы ещё не прошли регистрацию. Нажмите /start");
+  if (!u || !u.verified) return ctx.reply("Вы ещё не прошли регистрацию. Нажмите ▶️ Старт");
 
   const totalCorrect = u.correctCount || 0;
   const totalWrong = u.wrongCount || 0;
@@ -290,7 +296,6 @@ bot.command("mistakes", async ctx => {
   const args = ctx.message.text.split(" ").slice(1);
   let targetId = args[0] ? args[0].trim() : null;
 
-  // если ID не указан → смотрим ошибки самого админа
   if (!targetId) {
     targetId = String(ctx.from.id);
   }
@@ -479,7 +484,7 @@ bot.on("text", async ctx => {
     );
   }
 
-  // все остальные текстовые сообщения здесь не обрабатываем
+  // остальные текстовые сообщения здесь не трогаем
 });
 
 // ======================================================
@@ -494,7 +499,7 @@ bot.on("contact", async ctx => {
   const phone = ctx.message.contact.phone_number;
   tempUsers[userId].phone = phone;
 
-  const code = Math.floor(1000 + Math.random() * 9000); // 4 цифры
+  const code = Math.floor(1000 + Math.random() * 9000);
   tempUsers[userId].code = code;
   tempUsers[userId].step = "verify";
 
@@ -530,7 +535,7 @@ bot.action("role_client", async ctx => {
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ
+// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
 // ======================================================
 
 bot.on("callback_query", async ctx => {
@@ -578,7 +583,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА
+// АВТО-ОТПРАВКА УРОКОВ
 // ======================================================
 
 setInterval(async () => {
