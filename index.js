@@ -59,7 +59,7 @@ const usersCache = {};
 const OWNER_ID = 8097671685;
 
 // ======================================================
-// SMS.RU
+// SMS.RU (сейчас НЕ используется, но оставлен на будущее)
 // ======================================================
 
 async function sendSmsCode(phone, code) {
@@ -442,7 +442,7 @@ bot.command("stats", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /pdf30 — простой PDF за 30 дней (у тебя уже была)
+// КОМАНДА /pdf30 — простой PDF за 30 дней
 // ======================================================
 
 bot.command("pdf30", async ctx => {
@@ -844,85 +844,14 @@ bot.command("pdf_full", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /reset_all — полный сброс (ТОЛЬКО АДМИН)
-// ======================================================
-
-bot.command("reset_all", async ctx => {
-  if (ctx.from.id !== OWNER_ID) {
-    return ctx.reply("❌ У вас нет прав на полный сброс системы.");
-  }
-
-  try {
-    ctx.reply("⏳ Выполняю полный сброс Academy…");
-
-    const usersSnap = await db.collection("users").get();
-    for (const doc of usersSnap.docs) {
-      await doc.ref.delete();
-    }
-
-    const mistakesSnap = await db.collection("mistakes").get();
-    for (const doc of mistakesSnap.docs) {
-      await doc.ref.delete();
-    }
-
-    const progressSnap = await db.collection("progress").get();
-    for (const doc of progressSnap.docs) {
-      await doc.ref.delete();
-    }
-
-    ctx.reply("✔ Полный сброс завершён. Все lesson'ы теперь начнутся заново.");
-  } catch (err) {
-    console.error("Ошибка reset_all:", err);
-    ctx.reply("❌ Ошибка при сбросе. Подробности в серверной консоли.");
-  }
-});
-
-// ======================================================
-// ТЕКСТ + ВЕРИФИКАЦИЯ КОДА
+// ТЕКСТ (регистрация: только имя)
 // ======================================================
 
 bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  if (tempUsers[userId]?.step === "verify") {
-    const correctCode = tempUsers[userId].code;
-
-    if (text === String(correctCode)) {
-      const tmp = tempUsers[userId];
-
-      const userState = {
-        name: tmp.name,
-        phone: tmp.phone,
-        verified: true,
-        currentLesson: 1,
-        waitingAnswer: false,
-        nextLessonAt: 0,
-        lastLessonAt: 0,
-        points: 0,
-        streak: 0,
-        role: null,
-        correctCount: 0,
-        wrongCount: 0,
-      };
-
-      await saveUser(userId, userState);
-      usersCache[userId] = userState;
-
-      delete tempUsers[userId];
-
-      return ctx.reply(
-        "Телефон подтверждён ✅\nТеперь выбери свой статус:",
-        Markup.inlineKeyboard([
-          [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
-          [Markup.button.callback("🧑 Клиент", "role_client")],
-        ])
-      );
-    } else {
-      return ctx.reply("❌ Неверный код. Попробуйте ещё раз:");
-    }
-  }
-
+  // ввод имени
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
@@ -937,7 +866,7 @@ bot.on("text", async ctx => {
 });
 
 // ======================================================
-// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА)
+// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА) — БЕЗ СМС, СРАЗУ РЕГИСТРАЦИЯ
 // ======================================================
 
 bot.on("contact", async ctx => {
@@ -946,15 +875,36 @@ bot.on("contact", async ctx => {
   if (tempUsers[userId]?.step !== "phone") return;
 
   const phone = ctx.message.contact.phone_number;
-  tempUsers[userId].phone = phone;
+  const tmp = tempUsers[userId] || {};
+  const name = tmp.name || ctx.from.first_name || "Без имени";
 
-  const code = Math.floor(1000 + Math.random() * 9000);
-  tempUsers[userId].code = code;
-  tempUsers[userId].step = "verify";
+  const userState = {
+    name,
+    phone,
+    verified: true,
+    currentLesson: 1,
+    waitingAnswer: false,
+    nextLessonAt: 0,
+    lastLessonAt: 0,
+    points: 0,
+    streak: 0,
+    role: null,
+    correctCount: 0,
+    wrongCount: 0,
+  };
 
-  await sendSmsCode(phone, code);
+  await saveUser(userId, userState);
+  usersCache[userId] = userState;
 
-  return ctx.reply("Мы отправили вам СМС с кодом. Введите код из сообщения:");
+  delete tempUsers[userId];
+
+  return ctx.reply(
+    "Номер телефона сохранён ✅\nТеперь выбери свой статус:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
+      [Markup.button.callback("🧑 Клиент", "role_client")],
+    ])
+  );
 });
 
 // ======================================================
