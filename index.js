@@ -3,8 +3,10 @@ const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
+const PDFDocument = require('pdfkit');   // для PDF
+const fs = require('fs');                // для временного файла
+const path = require('path');            // безопасные пути
 const lessons = require('./lessons');
-const { generate30DaysPDF } = require('./utils/pdfReport'); // ⬅ PDF c локальным шрифтом
 
 // ======================================================
 // FIREBASE
@@ -84,7 +86,7 @@ async function sendSmsCode(phone, code) {
 }
 
 // ======================================================
-// FIRESTORE
+// FIRESTORE ХЕЛПЕРЫ
 // ======================================================
 
 async function loadUser(userId) {
@@ -117,6 +119,14 @@ async function logMistake(userId, lessonNumber, lesson, userAnswer) {
     correctAnswer: lesson.correct,
     ts: Date.now(),
   });
+}
+
+// небольшая утилита для разрыва страниц
+function ensureSpace(doc, need = 80) {
+  const bottom = doc.page.height - doc.page.margins.bottom;
+  if (doc.y + need > bottom) {
+    doc.addPage();
+  }
 }
 
 // ======================================================
@@ -254,6 +264,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
   snapshot.forEach(doc => {
     const u = doc.data();
     users.push({
+      id: doc.id,
       name: u.name || "Без имени",
       points: u.points || 0
     });
@@ -431,7 +442,7 @@ bot.command("stats", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /pdf30 — PDF-отчёт за 30 дней (ТОЛЬКО АДМИН)
+// КОМАНДА /pdf30 — простой PDF за 30 дней (у тебя уже была)
 // ======================================================
 
 bot.command("pdf30", async ctx => {
@@ -440,49 +451,395 @@ bot.command("pdf30", async ctx => {
   }
 
   try {
-    await ctx.reply("⏳ Готовлю PDF-отчёт за последние 30 дней…");
+    ctx.reply("⏳ Готовлю простой PDF-отчёт за последние 30 дней…");
 
-    const now = Date.now();
-    const monthAgo = now - 30 * 24 * 60 * 60 * 1000;
+    const filePath = path.join(__dirname, "report_30days.pdf");
+    const doc = new PDFDocument();
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+
+    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
 
     const progressSnap = await db.collection("progress")
-      .where("ts", ">=", monthAgo)
+      .where("ts", ">", since)
       .get();
 
-    let totalCorrect = 0;
-    let totalWrong = 0;
-    const activeUsers = new Set();
+    let totalOK = 0;
+    let totalFAIL = 0;
 
-    progressSnap.forEach(doc => {
-      const d = doc.data();
-      activeUsers.add(d.userId);
-      if (d.result === "OK") totalCorrect++;
-      else totalWrong++;
+    progressSnap.forEach(p => {
+      const data = p.data();
+      if (data.result === "OK") totalOK++;
+      else totalFAIL++;
     });
 
-    const total = totalCorrect + totalWrong;
-    const percent = total === 0 ? 0 : Math.round((totalCorrect / total) * 100);
+    const total = totalOK + totalFAIL;
+    const percent = total === 0 ? 0 : Math.round((totalOK / total) * 100);
 
-    const pdfPath = await generate30DaysPDF({
-      activeUsers: activeUsers.size,
-      totalCorrect,
-      totalWrong,
-      percent,
-      extra: [
-        "Уроки отправляются стабильно.",
-        "Ошибки фиксируются и логируются.",
-        "Пользователи активно проходят обучение."
-      ]
-    });
+    doc.fontSize(22).text("Technocolor Academy", { align: "center" });
+    doc.moveDown();
+    doc.fontSize(18).text("Отчёт за последние 30 дней", { align: "center" });
+    doc.moveDown(2);
 
-    await ctx.replyWithDocument({
-      source: pdfPath,
-      filename: "report_30days.pdf"
+    doc.fontSize(14).text(`Всего ответов: ${total}`);
+    doc.text(`Правильных: ${totalOK}`);
+    doc.text(`Ошибок: ${totalFAIL}`);
+    doc.text(`Точность: ${percent}%`);
+    doc.moveDown(2);
+
+    doc.text("Отчёт сформирован автоматически системой Technocolor Academy.");
+    doc.end();
+
+    stream.on("finish", async () => {
+      await ctx.replyWithDocument({
+        source: filePath,
+        filename: "report_30days.pdf"
+      });
+      fs.unlinkSync(filePath);
     });
 
   } catch (err) {
     console.error("Ошибка PDF:", err);
-    ctx.reply("❌ Ошибка при создании PDF. Подробности в логах Render.");
+    ctx.reply("❌ Ошибка при создании PDF. Подробности в логах.");
+  }
+});
+
+// ======================================================
+// РАСШИРЕННЫЙ ОТЧЁТ: ХЕЛПЕР buildFullReport30Days
+// ======================================================
+
+async function buildFullReport30Days(filePath) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const now = Date.now();
+      const since = now - 30 * 24 * 60 * 60 * 1000;
+
+      // Запросы к Firestore
+      const [usersSnap, progressSnap, mistakesSnap] = await Promise.all([
+        db.collection("users").get(),
+        db.collection("progress").where("ts", ">", since).get(),
+        db.collection("mistakes").where("ts", ">", since).get()
+      ]);
+
+      // Подготовка данных
+      const users = [];
+      let totalCorrectAll = 0;
+      let totalWrongAll = 0;
+      let sumLessons = 0;
+
+      usersSnap.forEach(doc => {
+        const u = doc.data();
+        users.push({
+          id: doc.id,
+          name: u.name || "Без имени",
+          points: u.points || 0,
+          correctCount: u.correctCount || 0,
+          wrongCount: u.wrongCount || 0,
+          currentLesson: u.currentLesson || 0,
+          lastLessonAt: u.lastLessonAt || null
+        });
+        totalCorrectAll += u.correctCount || 0;
+        totalWrongAll += u.wrongCount || 0;
+        sumLessons += u.currentLesson || 0;
+      });
+
+      const usersCount = users.length;
+      const totalAnswersAll = totalCorrectAll + totalWrongAll;
+      const accuracyAll = totalAnswersAll === 0 ? 0 : Math.round((totalCorrectAll / totalAnswersAll) * 100);
+      const avgLessons = usersCount === 0 ? 0 : (sumLessons / usersCount).toFixed(1);
+
+      // Активность за 30 дней
+      const activity = new Array(30).fill(0);
+      let totalOK30 = 0;
+      let totalFAIL30 = 0;
+      const activeUserIds = new Set();
+
+      progressSnap.forEach(p => {
+        const d = p.data();
+        const ts = d.ts || 0;
+        const dayIndex = Math.floor((ts - since) / (24 * 60 * 60 * 1000));
+        if (dayIndex >= 0 && dayIndex < 30) {
+          activity[dayIndex]++;
+        }
+        if (d.result === "OK") totalOK30++;
+        else totalFAIL30++;
+        if (d.userId) activeUserIds.add(String(d.userId));
+      });
+
+      const total30 = totalOK30 + totalFAIL30;
+      const accuracy30 = total30 === 0 ? 0 : Math.round((totalOK30 / total30) * 100);
+      const activeUsersCount = activeUserIds.size;
+
+      // ТОП-10 по баллам
+      const topByPoints = [...users]
+        .sort((a, b) => (b.points || 0) - (a.points || 0))
+        .slice(0, 10);
+
+      // Анти-рейтинг по ошибкам (за 30 дней)
+      const errorByUser = {};
+      mistakesSnap.forEach(m => {
+        const data = m.data();
+        const uid = String(data.userId);
+        errorByUser[uid] = (errorByUser[uid] || 0) + 1;
+      });
+
+      const antiTop = Object.entries(errorByUser)
+        .map(([uid, errCount]) => {
+          const u = users.find(x => String(x.id) === uid);
+          return {
+            uid,
+            name: u?.name || uid,
+            errors: errCount,
+            points: u?.points || 0
+          };
+        })
+        .sort((a, b) => b.errors - a.errors)
+        .slice(0, 10);
+
+      // Популярные ошибки (по вопросам)
+      const mistakesAgg = {};
+      mistakesSnap.forEach(doc => {
+        const m = doc.data();
+        const key = `${m.lesson}|||${m.question}|||${m.correctAnswer}`;
+        if (!mistakesAgg[key]) {
+          mistakesAgg[key] = {
+            lesson: m.lesson,
+            question: m.question,
+            correctAnswer: m.correctAnswer,
+            count: 0,
+            wrongVariants: {}
+          };
+        }
+        mistakesAgg[key].count++;
+        if (m.userAnswer) {
+          mistakesAgg[key].wrongVariants[m.userAnswer] =
+            (mistakesAgg[key].wrongVariants[m.userAnswer] || 0) + 1;
+        }
+      });
+
+      const popularMistakes = Object.values(mistakesAgg)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      // ====== Рисуем PDF ======
+      const doc = new PDFDocument({ margin: 50 });
+      const stream = fs.createWriteStream(filePath);
+      doc.pipe(stream);
+
+      // Шрифт: пробуем кастомный, иначе Helvetica
+      const fontPath = path.join(__dirname, 'fonts', 'Roboto-Regular.ttf');
+      if (fs.existsSync(fontPath)) {
+        doc.font(fontPath);
+      } else {
+        doc.font('Helvetica');
+      }
+
+      // Обложка
+      doc.fontSize(24).text("Technocolor Academy", { align: "center" });
+      doc.moveDown();
+      doc.fontSize(18).text("Расширенный отчёт за последние 30 дней", { align: "center" });
+      doc.moveDown(2);
+      doc.fontSize(12).text(`Дата формирования: ${new Date().toLocaleString("ru-RU")}`);
+      doc.text(`Всего пользователей в системе: ${usersCount}`);
+      doc.moveDown(3);
+      doc.fontSize(10).text("Отчёт сформирован автоматически системой Technocolor Academy.", { align: "left" });
+
+      doc.addPage();
+
+      // Блок 1 — Общая статистика
+      doc.fontSize(18).text("1. Общая статистика за 30 дней", { underline: true });
+      doc.moveDown();
+
+      doc.fontSize(12);
+      doc.text(`Всего пользователей: ${usersCount}`);
+      doc.text(`Активных за 30 дней (давали ответы): ${activeUsersCount}`);
+      doc.text(`Среднее количество пройденных уроков на пользователя: ${avgLessons}`);
+      doc.moveDown();
+
+      doc.text(`Всего ответов за 30 дней: ${total30}`);
+      doc.text(`Правильных за 30 дней: ${totalOK30}`);
+      doc.text(`Ошибок за 30 дней: ${totalFAIL30}`);
+      doc.text(`Точность за 30 дней: ${accuracy30}%`);
+      doc.moveDown();
+
+      doc.text(`Всего правильных за всё время: ${totalCorrectAll}`);
+      doc.text(`Всего ошибок за всё время: ${totalWrongAll}`);
+      doc.text(`Общая точность за всё время: ${accuracyAll}%`);
+      doc.moveDown(2);
+
+      // Прогресс-бар точности за 30 дней
+      ensureSpace(doc, 60);
+      const barX = doc.x;
+      const barY = doc.y + 10;
+      const barW = 400;
+      const barH = 14;
+
+      doc.fontSize(12).text("Точность ответов за 30 дней:", { continued: false });
+      doc.moveDown(0.5);
+
+      doc.rect(barX, barY, barW, barH).stroke();
+      const correctWidth = barW * (accuracy30 / 100);
+      doc.save();
+      doc.rect(barX, barY, correctWidth, barH).fill('#4caf50');
+      doc.restore();
+      doc.moveDown(2);
+      doc.text(`Зелёная часть — доля правильных ответов (${accuracy30}%).`);
+      doc.moveDown(2);
+
+      // График активности по дням
+      ensureSpace(doc, 160);
+      doc.fontSize(16).text("2. Активность по дням (30 дней)", { underline: true });
+      doc.moveDown();
+
+      const chartX = doc.x;
+      const chartY = doc.y + 10;
+      const chartW = 450;
+      const chartH = 120;
+
+      // рамка
+      doc.rect(chartX, chartY, chartW, chartH).stroke();
+
+      const maxVal = Math.max(...activity) || 1;
+      const stepX = chartW / (activity.length - 1 || 1);
+
+      doc.moveTo(chartX, chartY + chartH);
+      activity.forEach((v, i) => {
+        const x = chartX + i * stepX;
+        const y = chartY + chartH - (v / maxVal) * chartH;
+        if (i === 0) doc.moveTo(x, y);
+        else doc.lineTo(x, y);
+      });
+      doc.stroke();
+
+      doc.fontSize(10).text(
+        "Слева — 30 дней назад, справа — сегодня. По вертикали — количество ответов.",
+        chartX,
+        chartY + chartH + 10
+      );
+
+      doc.addPage();
+
+      // ТОП-10 по баллам
+      doc.fontSize(18).text("3. ТОП-10 участников по баллам", { underline: true });
+      doc.moveDown();
+
+      doc.fontSize(11);
+      if (topByPoints.length === 0) {
+        doc.text("Данных пока нет.");
+      } else {
+        topByPoints.forEach((u, i) => {
+          ensureSpace(doc, 30);
+          const totalAnswersU = (u.correctCount || 0) + (u.wrongCount || 0);
+          const accU = totalAnswersU === 0 ? 0 : Math.round((u.correctCount / totalAnswersU) * 100);
+          doc.text(
+            `${i + 1}) ${u.name} — баллы: ${u.points}, пройдено уроков: ${u.currentLesson}, точность: ${accU}%`
+          );
+        });
+      }
+
+      doc.addPage();
+
+      // Анти-рейтинг по ошибкам
+      doc.fontSize(18).text("4. Анти-рейтинг по ошибкам (за 30 дней)", { underline: true });
+      doc.moveDown();
+
+      doc.fontSize(11);
+      if (antiTop.length === 0) {
+        doc.text("За последние 30 дней ошибок не зафиксировано — это отлично.");
+      } else {
+        antiTop.forEach((u, i) => {
+          ensureSpace(doc, 30);
+          doc.text(
+            `${i + 1}) ${u.name} — ошибок за 30 дней: ${u.errors}, баллы: ${u.points}`
+          );
+        });
+      }
+
+      doc.addPage();
+
+      // Популярные ошибки
+      doc.fontSize(18).text("5. Самые частые ошибки по вопросам", { underline: true });
+      doc.moveDown();
+
+      if (popularMistakes.length === 0) {
+        doc.fontSize(11).text("За последние 30 дней не найдено повторяющихся ошибок.");
+      } else {
+        popularMistakes.forEach((m, i) => {
+          ensureSpace(doc, 80);
+          doc.fontSize(12).text(`${i + 1}) Урок ${m.lesson}`, { continued: false });
+          doc.fontSize(11).text(`Вопрос: ${m.question}`);
+          doc.text(`Ошибок за 30 дней: ${m.count}`);
+          const wrongList = Object.entries(m.wrongVariants)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 2);
+          if (wrongList.length > 0) {
+            const topWrong = wrongList
+              .map(([val, cnt]) => `"${val}" — ${cnt} раз(а)`)
+              .join("; ");
+            doc.text(`Чаще всего отвечают: ${topWrong}`);
+          }
+          doc.text(`Правильный ответ: ${m.correctAnswer}`);
+          doc.moveDown();
+        });
+      }
+
+      doc.addPage();
+
+      // Итог
+      doc.fontSize(18).text("6. Выводы и рекомендации", { underline: true });
+      doc.moveDown();
+
+      doc.fontSize(12).text(
+        `Точность ответов за последние 30 дней составила ${accuracy30}%.`
+      );
+      if (popularMistakes.length > 0) {
+        const hardestLesson = popularMistakes[0].lesson;
+        doc.text(
+          `Наибольшее число ошибок приходится на вопросы урока №${hardestLesson}. Рекомендуется усилить обучение по этой теме и сделать дополнительные разборы.`
+        );
+      }
+      doc.moveDown();
+      doc.text(
+        "Рекомендуется ежемесячно анализировать динамику, просматривать анти-рейтинг и точечные ошибки, а также поощрять участников из ТОП-10 по баллам."
+      );
+      doc.moveDown(2);
+      doc.fontSize(10).text("Technocolor Academy • Автоматический отчёт", { align: "right" });
+
+      doc.end();
+
+      stream.on("finish", () => resolve());
+      stream.on("error", reject);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// ======================================================
+// КОМАНДА /pdf_full — расширенная аналитика за 30 дней (ТОЛЬКО АДМИН)
+// ======================================================
+
+bot.command("pdf_full", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав на просмотр расширенного отчёта.");
+  }
+
+  try {
+    await ctx.reply("⏳ Формирую расширенный PDF-отчёт за последние 30 дней…");
+
+    const filePath = path.join(__dirname, `report_full_30days_${Date.now()}.pdf`);
+
+    await buildFullReport30Days(filePath);
+
+    await ctx.replyWithDocument({
+      source: filePath,
+      filename: "Technocolor_Report_30days_full.pdf"
+    });
+
+    fs.unlinkSync(filePath);
+  } catch (err) {
+    console.error("Ошибка pdf_full:", err);
+    ctx.reply("❌ Ошибка при создании расширенного PDF. Подробности в логах.");
   }
 });
 
@@ -528,7 +885,6 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // проверка СМС-кода
   if (tempUsers[userId]?.step === "verify") {
     const correctCode = tempUsers[userId].code;
 
@@ -567,7 +923,6 @@ bot.on("text", async ctx => {
     }
   }
 
-  // ввод имени
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
