@@ -45,7 +45,8 @@ const app = express();
 // Главная клавиатура
 const mainKeyboard = Markup.keyboard([
   ["▶️ Старт"],
-  ["Итог ⭐", "Рейтинг 🏆"]
+  ["Итог ⭐", "Рейтинг 🏆"],
+  ["⏳ Осталось времени"]
 ]).resize();
 
 // ======================================================
@@ -140,7 +141,7 @@ async function sendLesson(userId, lessonNumber) {
   if (!lesson) {
     await bot.telegram.sendMessage(chatId, "🎉 Все 90 уроков пройдены! Молодец!");
 
-    const u = usersCache[userId];
+    const u = usersCache[userId] || (await loadUser(userId));
     if (u) {
       u.finished = true;
       u.waitingAnswer = false;
@@ -223,11 +224,6 @@ async function handleStart(ctx) {
 bot.start(handleStart);
 bot.hears("▶️ Старт", handleStart);
 
-{
-    text: "⏳ Осталось времени",
-    callback_data: "check_time"
-}
-
 // ======================================================
 // КНОПКА Итог ⭐
 // ======================================================
@@ -258,7 +254,6 @@ bot.hears("Итог ⭐", async ctx => {
   ctx.reply(text, { parse_mode: "Markdown" });
 });
 
-
 // ======================================================
 // КНОПКА Рейтинг 🏆
 // ======================================================
@@ -287,6 +282,44 @@ bot.hears("Рейтинг 🏆", async ctx => {
   });
 
   ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+// ======================================================
+// КНОПКА ⏳ Осталось времени
+// ======================================================
+
+bot.hears("⏳ Осталось времени", async ctx => {
+  const userId = ctx.from.id;
+  const u = usersCache[userId] || await loadUser(userId);
+
+  if (!u || !u.verified) {
+    return ctx.reply("Сначала нажми ▶️ Старт и пройди быструю регистрацию.");
+  }
+
+  // Если сейчас активный вопрос — ждать нечего
+  if (u.waitingAnswer) {
+    return ctx.reply("Сейчас у тебя есть активный вопрос — отвечай на него 👇");
+  }
+
+  if (!u.nextLessonAt) {
+    return ctx.reply("👍 Ты можешь получать новый урок. Если он ещё не пришёл — скоро придёт автоматически.");
+  }
+
+  const now = Date.now();
+  const diff = u.nextLessonAt - now;
+
+  if (diff <= 0) {
+    return ctx.reply("🔥 Время пришло! Можешь проходить следующий урок.");
+  }
+
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+  let message = "⏳ До следующего урока осталось:\n";
+  if (hours > 0) message += `• ${hours} ч\n`;
+  message += `• ${minutes} мин`;
+
+  await ctx.reply(message);
 });
 
 // ======================================================
@@ -520,14 +553,12 @@ async function buildFullReport30Days(filePath) {
       const now = Date.now();
       const since = now - 30 * 24 * 60 * 60 * 1000;
 
-      // Запросы к Firestore
       const [usersSnap, progressSnap, mistakesSnap] = await Promise.all([
         db.collection("users").get(),
         db.collection("progress").where("ts", ">", since).get(),
         db.collection("mistakes").where("ts", ">", since).get()
       ]);
 
-      // Подготовка данных
       const users = [];
       let totalCorrectAll = 0;
       let totalWrongAll = 0;
@@ -554,7 +585,6 @@ async function buildFullReport30Days(filePath) {
       const accuracyAll = totalAnswersAll === 0 ? 0 : Math.round((totalCorrectAll / totalAnswersAll) * 100);
       const avgLessons = usersCount === 0 ? 0 : (sumLessons / usersCount).toFixed(1);
 
-      // Активность за 30 дней
       const activity = new Array(30).fill(0);
       let totalOK30 = 0;
       let totalFAIL30 = 0;
@@ -576,12 +606,10 @@ async function buildFullReport30Days(filePath) {
       const accuracy30 = total30 === 0 ? 0 : Math.round((totalOK30 / total30) * 100);
       const activeUsersCount = activeUserIds.size;
 
-      // ТОП-10 по баллам
       const topByPoints = [...users]
         .sort((a, b) => (b.points || 0) - (a.points || 0))
         .slice(0, 10);
 
-      // Анти-рейтинг по ошибкам (за 30 дней)
       const errorByUser = {};
       mistakesSnap.forEach(m => {
         const data = m.data();
@@ -602,7 +630,6 @@ async function buildFullReport30Days(filePath) {
         .sort((a, b) => b.errors - a.errors)
         .slice(0, 10);
 
-      // Популярные ошибки (по вопросам)
       const mistakesAgg = {};
       mistakesSnap.forEach(doc => {
         const m = doc.data();
@@ -627,12 +654,10 @@ async function buildFullReport30Days(filePath) {
         .sort((a, b) => b.count - a.count)
         .slice(0, 5);
 
-      // ====== Рисуем PDF ======
       const doc = new PDFDocument({ margin: 50 });
       const stream = fs.createWriteStream(filePath);
       doc.pipe(stream);
 
-      // Шрифт: пробуем кастомный, иначе Helvetica
       const fontPath = path.join(__dirname, 'fonts', 'Roboto-Regular.ttf');
       if (fs.existsSync(fontPath)) {
         doc.font(fontPath);
@@ -640,7 +665,6 @@ async function buildFullReport30Days(filePath) {
         doc.font('Helvetica');
       }
 
-      // Обложка
       doc.fontSize(24).text("Technocolor Academy", { align: "center" });
       doc.moveDown();
       doc.fontSize(18).text("Расширенный отчёт за последние 30 дней", { align: "center" });
@@ -652,7 +676,6 @@ async function buildFullReport30Days(filePath) {
 
       doc.addPage();
 
-      // Блок 1 — Общая статистика
       doc.fontSize(18).text("1. Общая статистика за 30 дней", { underline: true });
       doc.moveDown();
 
@@ -673,7 +696,6 @@ async function buildFullReport30Days(filePath) {
       doc.text(`Общая точность за всё время: ${accuracyAll}%`);
       doc.moveDown(2);
 
-      // Прогресс-бар точности за 30 дней
       ensureSpace(doc, 60);
       const barX = doc.x;
       const barY = doc.y + 10;
@@ -692,7 +714,6 @@ async function buildFullReport30Days(filePath) {
       doc.text(`Зелёная часть — доля правильных ответов (${accuracy30}%).`);
       doc.moveDown(2);
 
-      // График активности по дням
       ensureSpace(doc, 160);
       doc.fontSize(16).text("2. Активность по дням (30 дней)", { underline: true });
       doc.moveDown();
@@ -702,7 +723,6 @@ async function buildFullReport30Days(filePath) {
       const chartW = 450;
       const chartH = 120;
 
-      // рамка
       doc.rect(chartX, chartY, chartW, chartH).stroke();
 
       const maxVal = Math.max(...activity) || 1;
@@ -725,7 +745,6 @@ async function buildFullReport30Days(filePath) {
 
       doc.addPage();
 
-      // ТОП-10 по баллам
       doc.fontSize(18).text("3. ТОП-10 участников по баллам", { underline: true });
       doc.moveDown();
 
@@ -745,7 +764,6 @@ async function buildFullReport30Days(filePath) {
 
       doc.addPage();
 
-      // Анти-рейтинг по ошибкам
       doc.fontSize(18).text("4. Анти-рейтинг по ошибкам (за 30 дней)", { underline: true });
       doc.moveDown();
 
@@ -763,7 +781,6 @@ async function buildFullReport30Days(filePath) {
 
       doc.addPage();
 
-      // Популярные ошибки
       doc.fontSize(18).text("5. Самые частые ошибки по вопросам", { underline: true });
       doc.moveDown();
 
@@ -791,7 +808,6 @@ async function buildFullReport30Days(filePath) {
 
       doc.addPage();
 
-      // Итог
       doc.fontSize(18).text("6. Выводы и рекомендации", { underline: true });
       doc.moveDown();
 
@@ -857,7 +873,6 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // ввод имени
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
@@ -872,11 +887,7 @@ bot.on("text", async ctx => {
 });
 
 // ======================================================
-// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА) — БЕЗ СМС, СРАЗУ РЕГИСТРАЦИЯ
-// ======================================================
-
-// ======================================================
-// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА) — БЕЗ СМС, С МЕНЮ
+// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА)
 // ======================================================
 
 bot.on("contact", async ctx => {
@@ -888,7 +899,6 @@ bot.on("contact", async ctx => {
   const tmp = tempUsers[userId] || {};
   const name = tmp.name || ctx.from.first_name || "Без имени";
 
-  // СОХРАНЯЕМ ПОЛНОСТЬЮ ГОТОВОГО ПОЛЬЗОВАТЕЛЯ
   const userState = {
     name,
     phone,
@@ -909,18 +919,12 @@ bot.on("contact", async ctx => {
 
   delete tempUsers[userId];
 
-  // 🔥 СКРЫВАЕМ КНОПКУ "ОТПРАВИТЬ НОМЕР"
   await ctx.reply("Номер сохранён ✅", {
     reply_markup: { remove_keyboard: true }
   });
 
-  // 🔥 ВОЗВРАЩАЕМ ОСНОВНОЕ МЕНЮ
-  await ctx.reply("Меню:", Markup.keyboard([
-    ["▶️ Старт"],
-    ["Итог ⭐", "Рейтинг 🏆"]
-  ]).resize());
+  await ctx.reply("Меню:", mainKeyboard);
 
-  // 🔥 ПРЕДЛАГАЕМ ВЫБОР РОЛИ
   await ctx.reply(
     "Выберите статус:",
     Markup.inlineKeyboard([
@@ -964,12 +968,14 @@ bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
-  if (answer.startsWith("role_")) return;
+  if (answer.startsWith("role_")) return; // роли уже обработаны
 
   const u = usersCache[userId] || (await loadUser(userId));
   if (!u || !u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
+  if (!lesson) return;
+
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
@@ -1000,34 +1006,6 @@ bot.on("callback_query", async ctx => {
 
   await saveUser(userId, u);
 });
-
-bot.action("check_time", async ctx => {
-    const userId = ctx.from.id;
-    const u = await getUser(userId);
-
-    if (!u.nextLessonAt) {
-        return ctx.reply("👍 Ты можешь проходить урок прямо сейчас!");
-    }
-
-    const now = Date.now();
-    const diff = u.nextLessonAt - now;
-
-    if (diff <= 0) {
-        return ctx.reply("🔥 Время пришло! Можешь проходить следующий урок.");
-    }
-
-    // переводим в часы/минуты
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-    let message = "⏳ До следующего урока осталось:\n";
-
-    if (hours > 0) message += `• ${hours} ч\n`;
-    message += `• ${minutes} мин`;
-
-    await ctx.reply(message);
-});
-
 
 // ======================================================
 // АВТО-ОТПРАВКА УРОКОВ
