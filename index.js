@@ -253,6 +253,12 @@ bot.hears("Итог ⭐", async ctx => {
   ctx.reply(text, { parse_mode: "Markdown" });
 });
 
+
+{
+    text: "⏳ Осталось времени",
+    callback_data: "check_time"
+}
+
 // ======================================================
 // КНОПКА Рейтинг 🏆
 // ======================================================
@@ -978,8 +984,7 @@ bot.on("callback_query", async ctx => {
     }
 
     u.currentLesson++;
-    u.nextLessonAt = Date.now() + 10 * 1000;
-
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;
     await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
     await logProgress(userId, u, "OK");
   } else {
@@ -987,8 +992,7 @@ bot.on("callback_query", async ctx => {
     if (u.points && u.points > 0) u.points--;
     u.wrongCount = (u.wrongCount || 0) + 1;
 
-    u.nextLessonAt = Date.now() + 10 * 1000;
-
+    u.nextLessonAt = Date.now() + 30 * 60 * 1000;
     await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут попробуешь снова.");
     await logProgress(userId, u, "FAIL");
     await logMistake(userId, u.currentLesson, lesson, answer);
@@ -996,6 +1000,34 @@ bot.on("callback_query", async ctx => {
 
   await saveUser(userId, u);
 });
+
+bot.action("check_time", async ctx => {
+    const userId = ctx.from.id;
+    const u = await getUser(userId);
+
+    if (!u.nextLessonAt) {
+        return ctx.reply("👍 Ты можешь проходить урок прямо сейчас!");
+    }
+
+    const now = Date.now();
+    const diff = u.nextLessonAt - now;
+
+    if (diff <= 0) {
+        return ctx.reply("🔥 Время пришло! Можешь проходить следующий урок.");
+    }
+
+    // переводим в часы/минуты
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    let message = "⏳ До следующего урока осталось:\n";
+
+    if (hours > 0) message += `• ${hours} ч\n`;
+    message += `• ${minutes} мин`;
+
+    await ctx.reply(message);
+});
+
 
 // ======================================================
 // АВТО-ОТПРАВКА УРОКОВ
