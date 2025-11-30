@@ -1,65 +1,51 @@
-const PDFDocument = require('pdfkit');
-const fs = require('fs');
+const fs = require("fs");
+const path = require("path");
+const PDFDocument = require("pdfkit");
 
-function createPDF(path, stats) {
-  return new Promise(resolve => {
-    const doc = new PDFDocument({ margin: 40 });
+async function generate30DaysPDF(data) {
+  const reportsDir = path.join(__dirname, "../reports");
+  if (!fs.existsSync(reportsDir)) {
+    fs.mkdirSync(reportsDir);
+  }
 
-    doc.pipe(fs.createWriteStream(path));
+  const pdfPath = path.join(reportsDir, "report_30days.pdf");
 
-    // HEADER
-    doc
-      .fontSize(22)
-      .fillColor('#333')
-      .text('Technocolor Academy', { align: 'center' });
+  // путь к локальному шрифту
+  const fontPath = path.join(__dirname, "../fonts/Roboto-Regular.ttf");
 
-    doc.moveDown(0.5);
+  if (!fs.existsSync(fontPath)) {
+    throw new Error("❌ Шрифт не найден: " + fontPath);
+  }
 
-    doc
-      .fontSize(14)
-      .fillColor('#666')
-      .text('Аналитический отчёт за 30 дней', { align: 'center' });
+  // создаем PDF
+  const doc = new PDFDocument({ margin: 40 });
+  const stream = fs.createWriteStream(pdfPath);
+  doc.pipe(stream);
 
-    doc.moveDown(1.5);
+  doc.registerFont("Roboto", fontPath);
 
-    // Блок общей статистики
-    doc
-      .fontSize(18)
-      .fillColor('#000')
-      .text('Общая статистика', { underline: true });
+  // Заголовок
+  doc.font("Roboto").fontSize(24).text("Отчёт Technocolor Academy", {
+    align: "center",
+  });
 
-    doc.moveDown(0.5);
+  doc.moveDown();
+  doc.fontSize(14);
 
-    doc.fontSize(12).fillColor('#000');
-    doc.text(`Правильных ответов: ${stats.totalCorrect}`);
-    doc.text(`Ошибок: ${stats.totalWrong}`);
-    doc.text(`Всего ответов: ${stats.totalAnswers}`);
-    doc.text(`Средняя точность: ${stats.percent}%`);
+  doc.text(`Активных пользователей (30 дней): ${data.activeUsers}`);
+  doc.text(`Правильных ответов: ${data.totalCorrect}`);
+  doc.text(`Неправильных: ${data.totalWrong}`);
+  doc.text(`Точность: ${data.percent}%`);
 
-    doc.moveDown(1);
+  doc.moveDown();
+  doc.fontSize(13).text("Дополнительная статистика:");
+  data.extra.forEach((l) => doc.text("• " + l));
 
-    // Топ пользователей
-    doc.fontSize(18).text('ТОП-10 активных пользователей', { underline: true });
-    doc.moveDown(0.7);
+  doc.end();
 
-    stats.topUsers.forEach((u, i) => {
-      doc.fontSize(12).text(`${i + 1}) ${u.name} — ${u.total} действий (${u.ok}✓ / ${u.fail}✗)`);
-    });
-
-    doc.moveDown(1);
-
-    // Ошибки
-    doc.fontSize(18).text('ТОП уроков по ошибкам', { underline: true });
-    doc.moveDown(0.7);
-
-    stats.errors.forEach(e => {
-      doc.fontSize(12).text(`Урок ${e.lesson} — ${e.count} ошибок`);
-    });
-
-    doc.end();
-
-    resolve(path);
+  return new Promise((resolve) => {
+    stream.on("finish", () => resolve(pdfPath));
   });
 }
 
-module.exports = { createPDF };
+module.exports = { generate30DaysPDF };
