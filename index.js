@@ -3,10 +3,8 @@ const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
-const PDFDocument = require('pdfkit');   // <— для PDF
-const fs = require('fs');                // <— для временного файла
-const path = require('path');            // <— безопасные пути
 const lessons = require('./lessons');
+const { generate30DaysPDF } = require('./utils/pdfReport'); // ⬅ PDF c локальным шрифтом
 
 // ======================================================
 // FIREBASE
@@ -442,51 +440,44 @@ bot.command("pdf30", async ctx => {
   }
 
   try {
-    ctx.reply("⏳ Готовлю PDF-отчёт за последние 30 дней…");
+    await ctx.reply("⏳ Готовлю PDF-отчёт за последние 30 дней…");
 
-    const filePath = path.join(__dirname, "report_30days.pdf");
-    const doc = new PDFDocument();
-    const stream = fs.createWriteStream(filePath);
-    doc.pipe(stream);
-
-    doc.fontSize(22).text("📊 Technocolor Academy", { align: "center" });
-    doc.moveDown();
-    doc.fontSize(18).text("Отчёт за последние 30 дней", { align: "center" });
-    doc.moveDown(2);
-
-    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const monthAgo = now - 30 * 24 * 60 * 60 * 1000;
 
     const progressSnap = await db.collection("progress")
-      .where("ts", ">", since)
+      .where("ts", ">=", monthAgo)
       .get();
 
-    let totalOK = 0;
-    let totalFAIL = 0;
+    let totalCorrect = 0;
+    let totalWrong = 0;
+    const activeUsers = new Set();
 
-    progressSnap.forEach(p => {
-      const data = p.data();
-      if (data.result === "OK") totalOK++;
-      else totalFAIL++;
+    progressSnap.forEach(doc => {
+      const d = doc.data();
+      activeUsers.add(d.userId);
+      if (d.result === "OK") totalCorrect++;
+      else totalWrong++;
     });
 
-    const total = totalOK + totalFAIL;
-    const percent = total === 0 ? 0 : Math.round((totalOK / total) * 100);
+    const total = totalCorrect + totalWrong;
+    const percent = total === 0 ? 0 : Math.round((totalCorrect / total) * 100);
 
-    doc.fontSize(14).text(`Всего ответов: ${total}`);
-    doc.text(`Правильных: ${totalOK}`);
-    doc.text(`Ошибок: ${totalFAIL}`);
-    doc.text(`Точность: ${percent}%`);
-    doc.moveDown(2);
+    const pdfPath = await generate30DaysPDF({
+      activeUsers: activeUsers.size,
+      totalCorrect,
+      totalWrong,
+      percent,
+      extra: [
+        "Уроки отправляются стабильно.",
+        "Ошибки фиксируются и логируются.",
+        "Пользователи активно проходят обучение."
+      ]
+    });
 
-    doc.text("Отчёт сформирован автоматически системой Technocolor Academy.");
-    doc.end();
-
-    stream.on("finish", async () => {
-      await ctx.replyWithDocument({
-        source: filePath,
-        filename: "report_30days.pdf"
-      });
-      fs.unlinkSync(filePath);
+    await ctx.replyWithDocument({
+      source: pdfPath,
+      filename: "report_30days.pdf"
     });
 
   } catch (err) {
@@ -537,6 +528,7 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
+  // проверка СМС-кода
   if (tempUsers[userId]?.step === "verify") {
     const correctCode = tempUsers[userId].code;
 
@@ -575,6 +567,7 @@ bot.on("text", async ctx => {
     }
   }
 
+  // ввод имени
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
