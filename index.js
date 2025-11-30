@@ -898,8 +898,18 @@ bot.on("contact", async ctx => {
 
   delete tempUsers[userId];
 
-  return ctx.reply(
+  // 🔥 ВОТ ЭТО — ГЛАВНОЕ! Меняем клавиатуру!
+  await ctx.reply(
     "Номер телефона сохранён ✅\nТеперь выбери свой статус:",
+    {
+      reply_markup: {
+        remove_keyboard: true
+      }
+    }
+  );
+
+  return ctx.reply(
+    "Выберите статус:",
     Markup.inlineKeyboard([
       [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
       [Markup.button.callback("🧑 Клиент", "role_client")],
