@@ -41,6 +41,9 @@ if (!BOT_TOKEN) throw new Error("Нет BOT_TOKEN");
 
 const bot = new Telegraf(BOT_TOKEN);
 const app = express();
+app.get("/ping", (req, res) => {
+  res.status(200).send("OK");
+});
 
 // Главная клавиатура
 const mainKeyboard = Markup.keyboard([
