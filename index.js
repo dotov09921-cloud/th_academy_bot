@@ -219,7 +219,7 @@ async function resendCurrentQuestion(ctx, u) {
   );
 
   await ctx.reply(
-    `❓ Вопрос по уроку ${u.currentLesson}\n\n${lesson.question}`,
+    `❓ Вопрос по уроку ${u.currentLesson}\n\n${lesson.questionText}`,
     keyboard
   );
 }
