@@ -3,9 +3,9 @@ const { Telegraf, Markup } = require('telegraf');
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
-const PDFDocument = require('pdfkit');   // для PDF
-const fs = require('fs');                // для временного файла
-const path = require('path');            // безопасные пути
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 const lessons = require('./lessons');
 
 // ======================================================
@@ -19,7 +19,7 @@ if (!firebaseConfig) throw new Error("Нет FIREBASE_CREDENTIALS");
 try {
   firebaseConfig = JSON.parse(firebaseConfig);
 } catch (e) {
-  console.error("❌ Ошибка парсинга FIREBASE_CREDENTIALS:", e.message);
+    console.error("❌ Ошибка парсинга FIREBASE_CREDENTIALS:", e.message);
 }
 
 admin.initializeApp({
@@ -63,7 +63,7 @@ const usersCache = {};
 const OWNER_ID = 8097671685;
 
 // ======================================================
-// SMS.RU (сейчас НЕ используется, но оставлен на будущее)
+// SMS.RU (пока не используется, оставлен на будущее)
 // ======================================================
 
 async function sendSmsCode(phone, code) {
@@ -75,7 +75,6 @@ async function sendSmsCode(phone, code) {
     }
 
     const cleanPhone = phone.replace(/[^\d]/g, '');
-
     const url = `https://sms.ru/sms/send?api_id=${apiId}&to=${cleanPhone}&msg=${encodeURIComponent(
       'Ваш код подтверждения: ' + code
     )}&json=1`;
@@ -90,7 +89,7 @@ async function sendSmsCode(phone, code) {
 }
 
 // ======================================================
-// FIRESTORE ХЕЛПЕРЫ
+// FIRESTORE HELPERS
 // ======================================================
 
 async function loadUser(userId) {
@@ -100,7 +99,7 @@ async function loadUser(userId) {
 
 async function saveUser(userId, data) {
   await db.collection("users").doc(String(userId)).set(data, { merge: true });
-  usersCache[userId] = data;
+  usersCache[userId] = { ...(usersCache[userId] || {}), ...data };
 }
 
 async function logProgress(userId, state, result) {
@@ -118,14 +117,14 @@ async function logMistake(userId, lessonNumber, lesson, userAnswer) {
   await db.collection("mistakes").add({
     userId: String(userId),
     lesson: lessonNumber,
-    question: lesson.question,
+    question: lesson.questionText,
     userAnswer,
     correctAnswer: lesson.correct,
     ts: Date.now(),
   });
 }
 
-// небольшая утилита для разрыва страниц
+// небольшая утилита для разрыва страниц в PDF (может пригодиться)
 function ensureSpace(doc, need = 80) {
   const bottom = doc.page.height - doc.page.margins.bottom;
   if (doc.y + need > bottom) {
@@ -144,46 +143,51 @@ async function sendLesson(userId, lessonNumber) {
   if (!lesson) {
     await bot.telegram.sendMessage(chatId, "🎉 Все 90 уроков пройдены! Молодец!");
 
-    const u = usersCache[userId] || (await loadUser(userId));
-    if (u) {
-      u.finished = true;
-      u.waitingAnswer = false;
-      u.nextLessonAt = 0;
-      u.nextQuestionAt = 0;
-      await saveUser(userId, u);
-    }
+    const u = (usersCache[userId] || await loadUser(userId)) || {};
+    u.finished = true;
+    u.waitingAnswer = false;
+    u.nextLessonAt = 0;
+    u.nextQuestionAt = 0;
+    await saveUser(userId, u);
     return;
   }
 
-const sentLesson = await bot.telegram.sendMessage(
-  chatId,
-  `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`,
-);
+  const sentLesson = await bot.telegram.sendMessage(
+    chatId,
+    `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+  );
 
-u.lastLessonMessageId = sentLesson.message_id; // запоминаем ID урока
-u.waitingAnswer = false;
-u.nextLessonAt = Date.now() + 60 * 60 * 1000; // 1 час  );
-
-  const u = usersCache[userId] || (await loadUser(userId));
-  if (!u) return;
-
+  const u = (usersCache[userId] || await loadUser(userId)) || {};
+  u.currentLesson = lessonNumber;
+  u.lastLessonMessageId = sentLesson.message_id;  // запоминаем ID урока
   u.waitingAnswer = false;
   u.lastLessonAt = Date.now();
-  u.nextLessonAt = 0; // следующий урок будет назначен после ответа
+  u.nextLessonAt = 0;                             // следующий урок назначим после ответа
   u.nextQuestionAt = Date.now() + 60 * 60 * 1000; // вопрос через 1 час
 
   await saveUser(userId, u);
 }
 
 // ======================================================
-// ОТПРАВКА ВОПРОСА ПО УРОКУ
+// ОТПРАВКА ВОПРОСА ПО УРОКУ (С УДАЛЕНИЕМ УРОКА)
 // ======================================================
 
 async function sendQuestion(userId, lessonNumber) {
   const chatId = Number(userId);
+  const u = (usersCache[userId] || await loadUser(userId)) || {};
   const lesson = lessons[lessonNumber];
 
   if (!lesson) return;
+
+  // Удаляем учебный материал, если он ещё висит
+  if (u.lastLessonMessageId) {
+    try {
+      await bot.telegram.deleteMessage(chatId, u.lastLessonMessageId);
+    } catch (e) {
+      console.log("⚠️ Не удалось удалить сообщение с уроком:", e.message);
+    }
+    u.lastLessonMessageId = null;
+  }
 
   const keyboard = Markup.inlineKeyboard(
     lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
@@ -191,12 +195,9 @@ async function sendQuestion(userId, lessonNumber) {
 
   await bot.telegram.sendMessage(
     chatId,
-    `❓ Вопрос по уроку ${lessonNumber}\n\n${lesson.question}`,
+    `❓ Вопрос по уроку ${lessonNumber}\n\n${lesson.questionText}`,
     keyboard
   );
-
-  const u = usersCache[userId] || (await loadUser(userId));
-  if (!u) return;
 
   u.waitingAnswer = true;
   u.nextQuestionAt = 0;
@@ -225,7 +226,7 @@ async function resendCurrentQuestion(ctx, u) {
 }
 
 // ======================================================
-// ОБЩИЙ ОБРАБОТЧИК СТАРТА
+// ОБРАБОТЧИК /start и кнопки "▶️ Старт"
 // ======================================================
 
 async function handleStart(ctx) {
@@ -250,22 +251,19 @@ async function handleStart(ctx) {
   ctx.reply("Привет! Напиши своё имя:");
 }
 
-// ======================================================
-// /start и кнопка "▶️ Старт"
-// ======================================================
-
 bot.start(handleStart);
 bot.hears("▶️ Старт", handleStart);
 
 // ======================================================
-// КНОПКА Итог ⭐
+// КНОПКА "Итог ⭐"
 // ======================================================
 
 bot.hears("Итог ⭐", async ctx => {
   const userId = ctx.from.id;
-  let u = usersCache[userId] || await loadUser(userId);
+  const u = usersCache[userId] || await loadUser(userId);
 
-  if (!u || !u.verified) return ctx.reply("Вы ещё не прошли регистрацию. Нажмите ▶️ Старт");
+  if (!u || !u.verified)
+    return ctx.reply("Вы ещё не прошли регистрацию. Нажмите ▶️ Старт");
 
   const totalCorrect = u.correctCount || 0;
   const totalWrong = u.wrongCount || 0;
@@ -288,13 +286,13 @@ bot.hears("Итог ⭐", async ctx => {
 });
 
 // ======================================================
-// КНОПКА Рейтинг 🏆
+// КНОПКА "Рейтинг 🏆"
 // ======================================================
 
 bot.hears("Рейтинг 🏆", async ctx => {
   const snapshot = await db.collection("users").get();
 
-  let users = [];
+  const users = [];
   snapshot.forEach(doc => {
     const u = doc.data();
     users.push({
@@ -318,7 +316,7 @@ bot.hears("Рейтинг 🏆", async ctx => {
 });
 
 // ======================================================
-// КНОПКА ⏳ Осталось времени
+// КНОПКА "⏳ Осталось времени"
 // ======================================================
 
 bot.hears("⏳ Осталось времени", async ctx => {
@@ -366,7 +364,7 @@ bot.hears("⏳ Осталось времени", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /news — поддержка медиа через reply (ТОЛЬКО АДМИН)
+// КОМАНДА /news (только админ)
 // ======================================================
 
 bot.command("news", async ctx => {
@@ -419,7 +417,7 @@ bot.command("news", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /mistakes [userId] — ошибки пользователя (ТОЛЬКО АДМИН)
+// /mistakes [userId] — ошибки пользователя (только админ)
 // ======================================================
 
 bot.command("mistakes", async ctx => {
@@ -428,11 +426,7 @@ bot.command("mistakes", async ctx => {
   }
 
   const args = ctx.message.text.split(" ").slice(1);
-  let targetId = args[0] ? args[0].trim() : null;
-
-  if (!targetId) {
-    targetId = String(ctx.from.id);
-  }
+  let targetId = args[0] ? args[0].trim() : String(ctx.from.id);
 
   try {
     const userData = await loadUser(targetId);
@@ -482,7 +476,7 @@ bot.command("mistakes", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /stats — общая статистика (ТОЛЬКО АДМИН)
+// /stats — общая статистика (только админ)
 // ======================================================
 
 bot.command("stats", async ctx => {
@@ -524,7 +518,7 @@ bot.command("stats", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /pdf30 — простой PDF за 30 дней
+// /pdf30 — простой PDF за 30 дней (только админ)
 // ======================================================
 
 bot.command("pdf30", async ctx => {
@@ -533,7 +527,7 @@ bot.command("pdf30", async ctx => {
   }
 
   try {
-    ctx.reply("⏳ Готовлю простой PDF-отчёт за последние 30 дней…");
+    await ctx.reply("⏳ Готовлю простой PDF-отчёт за последние 30 дней…");
 
     const filePath = path.join(__dirname, "report_30days.pdf");
     const doc = new PDFDocument();
@@ -587,7 +581,7 @@ bot.command("pdf30", async ctx => {
 });
 
 // ======================================================
-// РАСШИРЕННЫЙ ОТЧЁТ: ХЕЛПЕР buildFullReport30Days
+// ПОЛНЫЙ ОТЧЁТ: buildFullReport30Days (упрощённый вариант)
 // ======================================================
 
 async function buildFullReport30Days(filePath) {
@@ -596,279 +590,37 @@ async function buildFullReport30Days(filePath) {
       const now = Date.now();
       const since = now - 30 * 24 * 60 * 60 * 1000;
 
-      const [usersSnap, progressSnap, mistakesSnap] = await Promise.all([
+      const [usersSnap, progressSnap] = await Promise.all([
         db.collection("users").get(),
-        db.collection("progress").where("ts", ">", since).get(),
-        db.collection("mistakes").where("ts", ">", since).get()
+        db.collection("progress").where("ts", ">", since).get()
       ]);
 
-      const users = [];
-      let totalCorrectAll = 0;
-      let totalWrongAll = 0;
-      let sumLessons = 0;
-
-      usersSnap.forEach(doc => {
-        const u = doc.data();
-        users.push({
-          id: doc.id,
-          name: u.name || "Без имени",
-          points: u.points || 0,
-          correctCount: u.correctCount || 0,
-          wrongCount: u.wrongCount || 0,
-          currentLesson: u.currentLesson || 0,
-          lastLessonAt: u.lastLessonAt || null
-        });
-        totalCorrectAll += u.correctCount || 0;
-        totalWrongAll += u.wrongCount || 0;
-        sumLessons += u.currentLesson || 0;
-      });
-
-      const usersCount = users.length;
-      const totalAnswersAll = totalCorrectAll + totalWrongAll;
-      const accuracyAll = totalAnswersAll === 0 ? 0 : Math.round((totalCorrectAll / totalAnswersAll) * 100);
-      const avgLessons = usersCount === 0 ? 0 : (sumLessons / usersCount).toFixed(1);
-
-      const activity = new Array(30).fill(0);
-      let totalOK30 = 0;
-      let totalFAIL30 = 0;
-      const activeUserIds = new Set();
-
-      progressSnap.forEach(p => {
-        const d = p.data();
-        const ts = d.ts || 0;
-        const dayIndex = Math.floor((ts - since) / (24 * 60 * 60 * 1000));
-        if (dayIndex >= 0 && dayIndex < 30) {
-          activity[dayIndex]++;
-        }
-        if (d.result === "OK") totalOK30++;
-        else totalFAIL30++;
-        if (d.userId) activeUserIds.add(String(d.userId));
-      });
-
-      const total30 = totalOK30 + totalFAIL30;
-      const accuracy30 = total30 === 0 ? 0 : Math.round((totalOK30 / total30) * 100);
-      const activeUsersCount = activeUserIds.size;
-
-      const topByPoints = [...users]
-        .sort((a, b) => (b.points || 0) - (a.points || 0))
-        .slice(0, 10);
-
-      const errorByUser = {};
-      mistakesSnap.forEach(m => {
-        const data = m.data();
-        const uid = String(data.userId);
-        errorByUser[uid] = (errorByUser[uid] || 0) + 1;
-      });
-
-      const antiTop = Object.entries(errorByUser)
-        .map(([uid, errCount]) => {
-          const u = users.find(x => String(x.id) === uid);
-          return {
-            uid,
-            name: u?.name || uid,
-            errors: errCount,
-            points: u?.points || 0
-          };
-        })
-        .sort((a, b) => b.errors - a.errors)
-        .slice(0, 10);
-
-      const mistakesAgg = {};
-      mistakesSnap.forEach(doc => {
-        const m = doc.data();
-        const key = `${m.lesson}|||${m.question}|||${m.correctAnswer}`;
-        if (!mistakesAgg[key]) {
-          mistakesAgg[key] = {
-            lesson: m.lesson,
-            question: m.question,
-            correctAnswer: m.correctAnswer,
-            count: 0,
-            wrongVariants: {}
-          };
-        }
-        mistakesAgg[key].count++;
-        if (m.userAnswer) {
-          mistakesAgg[key].wrongVariants[m.userAnswer] =
-            (mistakesAgg[key].wrongVariants[m.userAnswer] || 0) + 1;
-        }
-      });
-
-      const popularMistakes = Object.values(mistakesAgg)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 5);
+      const usersCount = usersSnap.size;
+      const totalCorrect = progressSnap.docs.filter(p => p.data().result === "OK").length;
+      const totalWrong = progressSnap.docs.filter(p => p.data().result === "FAIL").length;
+      const total = totalCorrect + totalWrong;
+      const accuracy = total === 0 ? 0 : Math.round((totalCorrect / total) * 100);
 
       const doc = new PDFDocument({ margin: 50 });
       const stream = fs.createWriteStream(filePath);
       doc.pipe(stream);
 
-      const fontPath = path.join(__dirname, 'fonts', 'Roboto-Regular.ttf');
-      if (fs.existsSync(fontPath)) {
-        doc.font(fontPath);
-      } else {
-        doc.font('Helvetica');
-      }
-
       doc.fontSize(24).text("Technocolor Academy", { align: "center" });
       doc.moveDown();
       doc.fontSize(18).text("Расширенный отчёт за последние 30 дней", { align: "center" });
       doc.moveDown(2);
+
       doc.fontSize(12).text(`Дата формирования: ${new Date().toLocaleString("ru-RU")}`);
       doc.text(`Всего пользователей в системе: ${usersCount}`);
-      doc.moveDown(3);
-      doc.fontSize(10).text("Отчёт сформирован автоматически системой Technocolor Academy.", { align: "left" });
-
-      doc.addPage();
-
-      doc.fontSize(18).text("1. Общая статистика за 30 дней", { underline: true });
       doc.moveDown();
 
-      doc.fontSize(12);
-      doc.text(`Всего пользователей: ${usersCount}`);
-      doc.text(`Активных за 30 дней (давали ответы): ${activeUsersCount}`);
-      doc.text(`Среднее количество пройденных уроков на пользователя: ${avgLessons}`);
-      doc.moveDown();
-
-      doc.text(`Всего ответов за 30 дней: ${total30}`);
-      doc.text(`Правильных за 30 дней: ${totalOK30}`);
-      doc.text(`Ошибок за 30 дней: ${totalFAIL30}`);
-      doc.text(`Точность за 30 дней: ${accuracy30}%`);
-      doc.moveDown();
-
-      doc.text(`Всего правильных за всё время: ${totalCorrectAll}`);
-      doc.text(`Всего ошибок за всё время: ${totalWrongAll}`);
-      doc.text(`Общая точность за всё время: ${accuracyAll}%`);
+      doc.text(`Всего ответов за 30 дней: ${total}`);
+      doc.text(`Правильных: ${totalCorrect}`);
+      doc.text(`Ошибок: ${totalWrong}`);
+      doc.text(`Средняя точность: ${accuracy}%`);
       doc.moveDown(2);
 
-      ensureSpace(doc, 60);
-      const barX = doc.x;
-      const barY = doc.y + 10;
-      const barW = 400;
-      const barH = 14;
-
-      doc.fontSize(12).text("Точность ответов за 30 дней:", { continued: false });
-      doc.moveDown(0.5);
-
-      doc.rect(barX, barY, barW, barH).stroke();
-      const correctWidth = barW * (accuracy30 / 100);
-      doc.save();
-      doc.rect(barX, barY, correctWidth, barH).fill('#4caf50');
-      doc.restore();
-      doc.moveDown(2);
-      doc.text(`Зелёная часть — доля правильных ответов (${accuracy30}%).`);
-      doc.moveDown(2);
-
-      ensureSpace(doc, 160);
-      doc.fontSize(16).text("2. Активность по дням (30 дней)", { underline: true });
-      doc.moveDown();
-
-      const chartX = doc.x;
-      const chartY = doc.y + 10;
-      const chartW = 450;
-      const chartH = 120;
-
-      doc.rect(chartX, chartY, chartW, chartH).stroke();
-
-      const maxVal = Math.max(...activity) || 1;
-      const stepX = chartW / (activity.length - 1 || 1);
-
-      doc.moveTo(chartX, chartY + chartH);
-      activity.forEach((v, i) => {
-        const x = chartX + i * stepX;
-        const y = chartY + chartH - (v / maxVal) * chartH;
-        if (i === 0) doc.moveTo(x, y);
-        else doc.lineTo(x, y);
-      });
-      doc.stroke();
-
-      doc.fontSize(10).text(
-        "Слева — 30 дней назад, справа — сегодня. По вертикали — количество ответов.",
-        chartX,
-        chartY + chartH + 10
-      );
-
-      doc.addPage();
-
-      doc.fontSize(18).text("3. ТОП-10 участников по баллам", { underline: true });
-      doc.moveDown();
-
-      doc.fontSize(11);
-      if (topByPoints.length === 0) {
-        doc.text("Данных пока нет.");
-      } else {
-        topByPoints.forEach((u, i) => {
-          ensureSpace(doc, 30);
-          const totalAnswersU = (u.correctCount || 0) + (u.wrongCount || 0);
-          const accU = totalAnswersU === 0 ? 0 : Math.round((u.correctCount / totalAnswersU) * 100);
-          doc.text(
-            `${i + 1}) ${u.name} — баллы: ${u.points}, пройдено уроков: ${u.currentLesson}, точность: ${accU}%`
-          );
-        });
-      }
-
-      doc.addPage();
-
-      doc.fontSize(18).text("4. Анти-рейтинг по ошибкам (за 30 дней)", { underline: true });
-      doc.moveDown();
-
-      doc.fontSize(11);
-      if (antiTop.length === 0) {
-        doc.text("За последние 30 дней ошибок не зафиксировано — это отлично.");
-      } else {
-        antiTop.forEach((u, i) => {
-          ensureSpace(doc, 30);
-          doc.text(
-            `${i + 1}) ${u.name} — ошибок за 30 дней: ${u.errors}, баллы: ${u.points}`
-          );
-        });
-      }
-
-      doc.addPage();
-
-      doc.fontSize(18).text("5. Самые частые ошибки по вопросам", { underline: true });
-      doc.moveDown();
-
-      if (popularMistakes.length === 0) {
-        doc.fontSize(11).text("За последние 30 дней не найдено повторяющихся ошибок.");
-      } else {
-        popularMistakes.forEach((m, i) => {
-          ensureSpace(doc, 80);
-          doc.fontSize(12).text(`${i + 1}) Урок ${m.lesson}`, { continued: false });
-          doc.fontSize(11).text(`Вопрос: ${m.question}`);
-          doc.text(`Ошибок за 30 дней: ${m.count}`);
-          const wrongList = Object.entries(m.wrongVariants)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 2);
-          if (wrongList.length > 0) {
-            const topWrong = wrongList
-              .map(([val, cnt]) => `"${val}" — ${cnt} раз(а)`)
-              .join("; ");
-            doc.text(`Чаще всего отвечают: ${topWrong}`);
-          }
-          doc.text(`Правильный ответ: ${m.correctAnswer}`);
-          doc.moveDown();
-        });
-      }
-
-      doc.addPage();
-
-      doc.fontSize(18).text("6. Выводы и рекомендации", { underline: true });
-      doc.moveDown();
-
-      doc.fontSize(12).text(
-        `Точность ответов за последние 30 дней составила ${accuracy30}%.`
-      );
-      if (popularMistakes.length > 0) {
-        const hardestLesson = popularMistakes[0].lesson;
-        doc.text(
-          `Наибольшее число ошибок приходится на вопросы урока №${hardestLesson}. Рекомендуется усилить обучение по этой теме и сделать дополнительные разборы.`
-        );
-      }
-      doc.moveDown();
-      doc.text(
-        "Рекомендуется ежемесячно анализировать динамику, просматривать анти-рейтинг и точечные ошибки, а также поощрять участников из ТОП-10 по баллам."
-      );
-      doc.moveDown(2);
-      doc.fontSize(10).text("Technocolor Academy • Автоматический отчёт", { align: "right" });
+      doc.text("Отчёт сформирован автоматически системой Technocolor Academy.");
 
       doc.end();
 
@@ -881,7 +633,7 @@ async function buildFullReport30Days(filePath) {
 }
 
 // ======================================================
-// КОМАНДА /pdf_full — расширенная аналитика за 30 дней (ТОЛЬКО АДМИН)
+// /pdf_full — расширенная аналитика (только админ)
 // ======================================================
 
 bot.command("pdf_full", async ctx => {
@@ -909,7 +661,7 @@ bot.command("pdf_full", async ctx => {
 });
 
 // ======================================================
-// КОМАНДА /reset_lessons — сбросить уроки и начать с 1-го (ТОЛЬКО АДМИН)
+// /reset_lessons — сбросить уроки и начать с 1-го (только админ)
 // ======================================================
 
 bot.command("reset_lessons", async ctx => {
@@ -932,6 +684,8 @@ bot.command("reset_lessons", async ctx => {
         waitingAnswer: false,
         nextLessonAt: 0,
         nextQuestionAt: 0,
+        streak: 0,
+        lastLessonMessageId: null
       };
 
       await saveUser(userId, updated);
@@ -947,7 +701,7 @@ bot.command("reset_lessons", async ctx => {
 });
 
 // ======================================================
-// ТЕКСТ (регистрация: только имя)
+// РЕГИСТРАЦИЯ — имя
 // ======================================================
 
 bot.on("text", async ctx => {
@@ -968,7 +722,7 @@ bot.on("text", async ctx => {
 });
 
 // ======================================================
-// ПОЛУЧЕНИЕ КОНТАКТА (ТЕЛЕФОНА)
+// РЕГИСТРАЦИЯ — телефон
 // ======================================================
 
 bot.on("contact", async ctx => {
@@ -994,6 +748,7 @@ bot.on("contact", async ctx => {
     role: null,
     correctCount: 0,
     wrongCount: 0,
+    lastLessonMessageId: null
   };
 
   await saveUser(userId, userState);
@@ -1021,38 +776,41 @@ bot.on("contact", async ctx => {
 // ======================================================
 
 bot.action("role_employee", async ctx => {
-  const u = usersCache[ctx.from.id] || (await loadUser(ctx.from.id));
+  const userId = ctx.from.id;
+  const u = usersCache[userId] || await loadUser(userId);
   if (!u) return;
 
   u.role = "сотрудник";
-  await saveUser(ctx.from.id, u);
+  await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 👨‍🔧 Сотрудник");
-  return sendLesson(ctx.from.id, u.currentLesson);
+  return sendLesson(userId, u.currentLesson || 1);
 });
 
 bot.action("role_client", async ctx => {
-  const u = usersCache[ctx.from.id] || (await loadUser(ctx.from.id));
+  const userId = ctx.from.id;
+  const u = usersCache[userId] || await loadUser(userId);
   if (!u) return;
 
   u.role = "клиент";
-  await saveUser(ctx.from.id, u);
+  await saveUser(userId, u);
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
-  return sendLesson(ctx.from.id, u.currentLesson);
+  return sendLesson(userId, u.currentLesson || 1);
 });
 
 // ======================================================
-// ОБРАБОТКА ОТВЕТОВ НА УРОКИ
+// ОБРАБОТКА ОТВЕТОВ НА ВОПРОСЫ (callback_query)
 // ======================================================
 
 bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
-  if (answer.startsWith("role_")) return; // роли уже обработаны
+  // роли уже обработаны в bot.action("role_...")
+  if (answer.startsWith("role_")) return;
 
-  const u = usersCache[userId] || (await loadUser(userId));
+  const u = usersCache[userId] || await loadUser(userId);
   if (!u || !u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
@@ -1061,6 +819,7 @@ bot.on("callback_query", async ctx => {
   u.waitingAnswer = false;
 
   if (answer === lesson.correct) {
+    // правильный ответ
     u.streak = (u.streak || 0) + 1;
     u.points = (u.points || 0) + 1;
     u.correctCount = (u.correctCount || 0) + 1;
@@ -1071,19 +830,21 @@ bot.on("callback_query", async ctx => {
       await ctx.reply("🔥 Отлично! 3 правильных подряд — бонус +1 балл!");
     }
 
-    u.currentLesson++;
+    u.currentLesson = (u.currentLesson || 1) + 1;
     u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // следующий урок через 24 часа
-    u.nextQuestionAt = 0; // вопрос будет назначен после отправки урока
+    u.nextQuestionAt = 0; // вопрос назначим после нового урока
 
     await ctx.reply("✅ Правильно! Новый урок придёт через 24 часа.");
     await logProgress(userId, u, "OK");
   } else {
+    // неправильный ответ
     u.streak = 0;
     if (u.points && u.points > 0) u.points--;
     u.wrongCount = (u.wrongCount || 0) + 1;
 
-    u.nextLessonAt = Date.now() + 30 * 60 * 1000; // повторный урок через 30 минут
-    u.nextQuestionAt = 0; // вопрос будет назначен после отправки урока
+    // повтор этого же урока через 30 минут
+    u.nextLessonAt = Date.now() + 30 * 60 * 1000;
+    u.nextQuestionAt = 0;
 
     await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут повторим урок, потом придёт новый вопрос.");
     await logProgress(userId, u, "FAIL");
@@ -1094,7 +855,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА УРОКОВ И ВОПРОСОВ
+// АВТО-ОТПРАВКА УРОКОВ И ВОПРОСОВ ПО ТАЙМЕРАМ
 // ======================================================
 
 setInterval(async () => {
@@ -1107,39 +868,19 @@ setInterval(async () => {
 
     if (u.finished) continue;
 
-    // 1) Если время вопроса пришло, а активного вопроса нет — отправляем вопрос
-    if (!u.waitingAnswer && u.nextQuestionAt && now >= u.nextQuestionAt) {
-      await sendQuestion(userId, u.currentLesson);
+    // если ждём ответ – ничего не шлём
+    if (u.waitingAnswer) continue;
+
+    // 1) сначала вопрос (важнее)
+    if (u.nextQuestionAt && now >= u.nextQuestionAt) {
+      await sendQuestion(userId, u.currentLesson || 1);
       continue;
     }
 
-    // 2) Если время урока пришло, нет активного вопроса — отправляем урок
-    if (u.waitingAnswer) continue;
-    if (!u.nextLessonAt || now < u.nextLessonAt) continue;
-
-// Удаляем урок
-if (u.lastLessonMessageId) {
-  try {
-    await bot.telegram.deleteMessage(userId, u.lastLessonMessageId);
-  } catch (e) {
-    console.log("⚠️ Не удалось удалить урок:", e.message);
-  }
-}
-
-// Отправляем вопрос
-const lesson = lessons[u.currentLesson];
-const keyboard = Markup.inlineKeyboard(
-  lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
-);
-
-await bot.telegram.sendMessage(
-  userId,
-  `❓ Вопрос по уроку ${u.currentLesson}\n\n${lesson.questionText}`,
-  keyboard
-);
-
-u.waitingAnswer = true;
-await saveUser(userId, u);
+    // 2) потом урок
+    if (u.nextLessonAt && now >= u.nextLessonAt) {
+      await sendLesson(userId, u.currentLesson || 1);
+    }
   }
 }, 20000);
 
