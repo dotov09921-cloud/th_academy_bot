@@ -155,10 +155,14 @@ async function sendLesson(userId, lessonNumber) {
     return;
   }
 
-  await bot.telegram.sendMessage(
-    chatId,
-    `📘 Урок ${lessonNumber}\n\n${lesson.text}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
-  );
+const sentLesson = await bot.telegram.sendMessage(
+  chatId,
+  `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`,
+);
+
+u.lastLessonMessageId = sentLesson.message_id; // запоминаем ID урока
+u.waitingAnswer = false;
+u.nextLessonAt = Date.now() + 60 * 60 * 1000; // 1 час  );
 
   const u = usersCache[userId] || (await loadUser(userId));
   if (!u) return;
@@ -1113,7 +1117,29 @@ setInterval(async () => {
     if (u.waitingAnswer) continue;
     if (!u.nextLessonAt || now < u.nextLessonAt) continue;
 
-    await sendLesson(userId, u.currentLesson);
+// Удаляем урок
+if (u.lastLessonMessageId) {
+  try {
+    await bot.telegram.deleteMessage(userId, u.lastLessonMessageId);
+  } catch (e) {
+    console.log("⚠️ Не удалось удалить урок:", e.message);
+  }
+}
+
+// Отправляем вопрос
+const lesson = lessons[u.currentLesson];
+const keyboard = Markup.inlineKeyboard(
+  lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
+);
+
+await bot.telegram.sendMessage(
+  userId,
+  `❓ Вопрос по уроку ${u.currentLesson}\n\n${lesson.questionText}`,
+  keyboard
+);
+
+u.waitingAnswer = true;
+await saveUser(userId, u);
   }
 }, 20000);
 
