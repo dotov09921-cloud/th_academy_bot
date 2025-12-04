@@ -134,7 +134,7 @@ function ensureSpace(doc, need = 80) {
 }
 
 // ======================================================
-// ОТПРАВКА УРОКА
+// ОТПРАВКА УРОКА (ТОЛЬКО МАТЕРИАЛ, БЕЗ ВОПРОСА)
 // ======================================================
 
 async function sendLesson(userId, lessonNumber) {
@@ -148,11 +148,38 @@ async function sendLesson(userId, lessonNumber) {
     if (u) {
       u.finished = true;
       u.waitingAnswer = false;
-      u.nextLessonAt = null;
+      u.nextLessonAt = 0;
+      u.nextQuestionAt = 0;
       await saveUser(userId, u);
     }
     return;
   }
+
+  await bot.telegram.sendMessage(
+    chatId,
+    `📘 Урок ${lessonNumber}\n\n${lesson.text}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+  );
+
+  const u = usersCache[userId] || (await loadUser(userId));
+  if (!u) return;
+
+  u.waitingAnswer = false;
+  u.lastLessonAt = Date.now();
+  u.nextLessonAt = 0; // следующий урок будет назначен после ответа
+  u.nextQuestionAt = Date.now() + 60 * 60 * 1000; // вопрос через 1 час
+
+  await saveUser(userId, u);
+}
+
+// ======================================================
+// ОТПРАВКА ВОПРОСА ПО УРОКУ
+// ======================================================
+
+async function sendQuestion(userId, lessonNumber) {
+  const chatId = Number(userId);
+  const lesson = lessons[lessonNumber];
+
+  if (!lesson) return;
 
   const keyboard = Markup.inlineKeyboard(
     lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
@@ -160,7 +187,7 @@ async function sendLesson(userId, lessonNumber) {
 
   await bot.telegram.sendMessage(
     chatId,
-    `📘 Урок ${lessonNumber}\n\n${lesson.text}\n\n${lesson.question}`,
+    `❓ Вопрос по уроку ${lessonNumber}\n\n${lesson.question}`,
     keyboard
   );
 
@@ -168,14 +195,13 @@ async function sendLesson(userId, lessonNumber) {
   if (!u) return;
 
   u.waitingAnswer = true;
-  u.lastLessonAt = Date.now();
-  u.nextLessonAt = 0;
+  u.nextQuestionAt = 0;
 
   await saveUser(userId, u);
 }
 
 // ======================================================
-// ПОВТОРНАЯ ОТПРАВКА УЖЕ ВЫДАННОГО ВОПРОСА
+// ПОВТОРНАЯ ОТПРАВКА АКТИВНОГО ВОПРОСА
 // ======================================================
 
 async function resendCurrentQuestion(ctx, u) {
@@ -189,7 +215,7 @@ async function resendCurrentQuestion(ctx, u) {
   );
 
   await ctx.reply(
-    `📘 Урок ${u.currentLesson}\n\n${lesson.text}\n\n${lesson.question}`,
+    `❓ Вопрос по уроку ${u.currentLesson}\n\n${lesson.question}`,
     keyboard
   );
 }
@@ -299,30 +325,40 @@ bot.hears("⏳ Осталось времени", async ctx => {
     return ctx.reply("Сначала нажми ▶️ Старт и пройди быструю регистрацию.");
   }
 
-  // Если сейчас активный вопрос — ждать нечего
   if (u.waitingAnswer) {
     return ctx.reply("Сейчас у тебя есть активный вопрос — отвечай на него 👇");
   }
 
-  if (!u.nextLessonAt) {
-    return ctx.reply("👍 Ты можешь получать новый урок. Если он ещё не пришёл — скоро придёт автоматически.");
-  }
-
   const now = Date.now();
-  const diff = u.nextLessonAt - now;
+  const parts = [];
 
-  if (diff <= 0) {
-    return ctx.reply("🔥 Время пришло! Можешь проходить следующий урок.");
+  if (u.nextQuestionAt && u.nextQuestionAt > now) {
+    const diffQ = u.nextQuestionAt - now;
+    const hoursQ = Math.floor(diffQ / (1000 * 60 * 60));
+    const minutesQ = Math.floor((diffQ % (1000 * 60 * 60)) / (1000 * 60));
+
+    let line = "❓ До вопроса по текущему уроку осталось:\n";
+    if (hoursQ > 0) line += `• ${hoursQ} ч\n`;
+    line += `• ${minutesQ} мин`;
+    parts.push(line);
   }
 
-  const hours = Math.floor(diff / (1000 * 60 * 60));
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (u.nextLessonAt && u.nextLessonAt > now) {
+    const diffL = u.nextLessonAt - now;
+    const hoursL = Math.floor(diffL / (1000 * 60 * 60));
+    const minutesL = Math.floor((diffL % (1000 * 60 * 60)) / (1000 * 60));
 
-  let message = "⏳ До следующего урока осталось:\n";
-  if (hours > 0) message += `• ${hours} ч\n`;
-  message += `• ${minutes} мин`;
+    let line = "📘 До следующего урока осталось:\n";
+    if (hoursL > 0) line += `• ${hoursL} ч\n`;
+    line += `• ${minutesL} мин`;
+    parts.push(line);
+  }
 
-  await ctx.reply(message);
+  if (!parts.length) {
+    return ctx.reply("🔥 Все таймеры отработали. Скоро придёт новый урок или вопрос автоматически.");
+  }
+
+  await ctx.reply(parts.join("\n\n"));
 });
 
 // ======================================================
@@ -869,6 +905,44 @@ bot.command("pdf_full", async ctx => {
 });
 
 // ======================================================
+// КОМАНДА /reset_lessons — сбросить уроки и начать с 1-го (ТОЛЬКО АДМИН)
+// ======================================================
+
+bot.command("reset_lessons", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав сбрасывать уроки.");
+  }
+
+  try {
+    const snapshot = await db.collection("users").get();
+    let count = 0;
+
+    for (const doc of snapshot.docs) {
+      const userId = doc.id;
+      const u = doc.data() || {};
+
+      const updated = {
+        ...u,
+        currentLesson: 1,
+        finished: false,
+        waitingAnswer: false,
+        nextLessonAt: 0,
+        nextQuestionAt: 0,
+      };
+
+      await saveUser(userId, updated);
+      await sendLesson(userId, 1);
+      count++;
+    }
+
+    ctx.reply(`✔ Уроки сброшены. Всем отправлен Урок 1 по новой системе. Пользователей: ${count}.`);
+  } catch (err) {
+    console.error("Ошибка reset_lessons:", err);
+    ctx.reply("❌ Ошибка при сбросе уроков. Подробности в логах.");
+  }
+});
+
+// ======================================================
 // ТЕКСТ (регистрация: только имя)
 // ======================================================
 
@@ -910,6 +984,7 @@ bot.on("contact", async ctx => {
     waitingAnswer: false,
     nextLessonAt: 0,
     lastLessonAt: 0,
+    nextQuestionAt: 0,
     points: 0,
     streak: 0,
     role: null,
@@ -993,16 +1068,20 @@ bot.on("callback_query", async ctx => {
     }
 
     u.currentLesson++;
-    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000;
-    await ctx.reply("✅ Правильно! Следующий урок — через 24 часа.");
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // следующий урок через 24 часа
+    u.nextQuestionAt = 0; // вопрос будет назначен после отправки урока
+
+    await ctx.reply("✅ Правильно! Новый урок придёт через 24 часа.");
     await logProgress(userId, u, "OK");
   } else {
     u.streak = 0;
     if (u.points && u.points > 0) u.points--;
     u.wrongCount = (u.wrongCount || 0) + 1;
 
-    u.nextLessonAt = Date.now() + 30 * 60 * 1000;
-    await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут попробуешь снова.");
+    u.nextLessonAt = Date.now() + 30 * 60 * 1000; // повторный урок через 30 минут
+    u.nextQuestionAt = 0; // вопрос будет назначен после отправки урока
+
+    await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут повторим урок, потом придёт новый вопрос.");
     await logProgress(userId, u, "FAIL");
     await logMistake(userId, u.currentLesson, lesson, answer);
   }
@@ -1011,7 +1090,7 @@ bot.on("callback_query", async ctx => {
 });
 
 // ======================================================
-// АВТО-ОТПРАВКА УРОКОВ
+// АВТО-ОТПРАВКА УРОКОВ И ВОПРОСОВ
 // ======================================================
 
 setInterval(async () => {
@@ -1023,6 +1102,14 @@ setInterval(async () => {
     const u = doc.data();
 
     if (u.finished) continue;
+
+    // 1) Если время вопроса пришло, а активного вопроса нет — отправляем вопрос
+    if (!u.waitingAnswer && u.nextQuestionAt && now >= u.nextQuestionAt) {
+      await sendQuestion(userId, u.currentLesson);
+      continue;
+    }
+
+    // 2) Если время урока пришло, нет активного вопроса — отправляем урок
     if (u.waitingAnswer) continue;
     if (!u.nextLessonAt || now < u.nextLessonAt) continue;
 
