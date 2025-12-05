@@ -238,15 +238,30 @@ async function handleStart(ctx) {
   if (saved && saved.verified) {
     usersCache[userId] = saved;
 
+    // 1️⃣ Если есть активный вопрос — дублируем вопрос
     if (saved.waitingAnswer) {
       await ctx.reply("У тебя уже есть активный вопрос. Дублирую его 👇");
       await resendCurrentQuestion(ctx, saved);
       return;
     }
 
+    // 2️⃣ Если урок уже выслан, а вопрос ещё не пришёл — дублируем урок
+    const now = Date.now();
+    if (saved.nextQuestionAt && saved.nextQuestionAt > now && !saved.finished) {
+      const lesson = lessons[saved.currentLesson];
+      if (lesson) {
+        await ctx.reply(
+          `📘 Урок ${saved.currentLesson}\n\n${lesson.lessonText}\n\n⏳ Вопрос по этой теме уже запланирован, дождись уведомления.`
+        );
+      }
+      return;
+    }
+
+    // 3️⃣ Обычное приветствие
     return ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение 📚`);
   }
 
+  // 4️⃣ Новая регистрация
   tempUsers[userId] = { step: "name" };
   ctx.reply("Привет! Напиши своё имя:");
 }
