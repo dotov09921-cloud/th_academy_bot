@@ -777,13 +777,16 @@ bot.on("contact", async ctx => {
 
   await ctx.reply("Меню:", mainKeyboard);
 
-  await ctx.reply(
-    "Выберите статус:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
-      [Markup.button.callback("🧑 Клиент", "role_client")],
-    ])
-  );
+  const statusMessage = await ctx.reply(
+  "Выберите статус:",
+  Markup.inlineKeyboard([
+    [Markup.button.callback("👨‍🔧 Сотрудник", "role_employee")],
+    [Markup.button.callback("🧑 Клиент", "role_client")],
+  ])
+);
+
+// сохраняем ID сообщения в базе
+await saveUser(ctx.from.id, { lastRoleMessageId: statusMessage.message_id });
 });
 
 // ======================================================
@@ -793,7 +796,15 @@ bot.on("contact", async ctx => {
 bot.action("role_employee", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId] || await loadUser(userId);
-  if (!u) return;
+
+  // удаляем сообщение с кнопками
+  try { await ctx.deleteMessage(); } catch {}
+
+  // удаляем текст "Выберите статус"
+  if (u?.lastRoleMessageId) {
+    try { await ctx.telegram.deleteMessage(userId, u.lastRoleMessageId); } catch {}
+    u.lastRoleMessageId = null;
+  }
 
   u.role = "сотрудник";
   await saveUser(userId, u);
@@ -804,16 +815,16 @@ bot.action("role_employee", async ctx => {
 
 bot.action("role_client", async ctx => {
   const userId = ctx.from.id;
-
-  // Удаляем сообщение с кнопками роли
-  try {
-    await ctx.deleteMessage();
-  } catch (e) {
-    console.log("⚠️ Не удалось удалить сообщение выбора роли:", e.message);
-  }
-
   const u = usersCache[userId] || await loadUser(userId);
-  if (!u) return;
+
+  // удаляем сообщение с кнопками
+  try { await ctx.deleteMessage(); } catch {}
+
+  // удаляем текст "Выберите статус"
+  if (u?.lastRoleMessageId) {
+    try { await ctx.telegram.deleteMessage(userId, u.lastRoleMessageId); } catch {}
+    u.lastRoleMessageId = null;
+  }
 
   u.role = "клиент";
   await saveUser(userId, u);
