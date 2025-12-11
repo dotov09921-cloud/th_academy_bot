@@ -822,6 +822,13 @@ bot.on("callback_query", async ctx => {
   const userId = ctx.from.id;
   const answer = ctx.callbackQuery.data;
 
+  // Удаляем сообщение с вопросом (любое)
+  try {
+    await ctx.telegram.deleteMessage(ctx.chat.id, ctx.callbackQuery.message.message_id);
+  } catch (e) {
+    console.log("⚠️ Не удалось удалить вопрос:", e.message);
+  }
+
   // роли уже обработаны в bot.action("role_...")
   if (answer.startsWith("role_")) return;
 
