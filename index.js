@@ -193,16 +193,18 @@ async function sendQuestion(userId, lessonNumber) {
     lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
   );
 
-  await bot.telegram.sendMessage(
-    chatId,
-    `❓ Вопрос по уроку ${lessonNumber}\n\n${lesson.questionText}`,
-    keyboard
-  );
+  const sentQuestion = await bot.telegram.sendMessage(
+  chatId,
+  `❓ Вопрос по уроку ${lessonNumber}\n\n${lesson.questionText}`,
+  keyboard
+);
 
-  u.waitingAnswer = true;
-  u.nextQuestionAt = 0;
+// сохранить ID вопроса
+u.lastQuestionMessageId = sentQuestion.message_id;
+u.waitingAnswer = true;
+u.nextQuestionAt = 0;
 
-  await saveUser(userId, u);
+await saveUser(userId, u);
 }
 
 // ======================================================
@@ -832,6 +834,16 @@ bot.on("callback_query", async ctx => {
   if (!lesson) return;
 
   u.waitingAnswer = false;
+
+  // 🧽 Авто-удаление вопроса
+if (u.lastQuestionMessageId) {
+  try {
+    await ctx.telegram.deleteMessage(userId, u.lastQuestionMessageId);
+  } catch (e) {
+    console.log("⚠️ Не удалось удалить вопрос:", e.message);
+  }
+  u.lastQuestionMessageId = null;
+}
 
   if (answer === lesson.correct) {
     // правильный ответ
