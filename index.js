@@ -804,6 +804,14 @@ bot.action("role_employee", async ctx => {
 
 bot.action("role_client", async ctx => {
   const userId = ctx.from.id;
+
+  // Удаляем сообщение с кнопками роли
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {
+    console.log("⚠️ Не удалось удалить сообщение выбора роли:", e.message);
+  }
+
   const u = usersCache[userId] || await loadUser(userId);
   if (!u) return;
 
