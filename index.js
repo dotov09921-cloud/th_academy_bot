@@ -58,6 +58,7 @@ const mainKeyboard = Markup.keyboard([
 
 const tempUsers = {};
 const usersCache = {};
+const tempVideoUpload = {}; // сюда бот временно запоминает, к какому уроку загружается видео
 
 // 🔐 ID админа
 const OWNER_ID = 8097671685;
@@ -140,6 +141,10 @@ async function sendLesson(userId, lessonNumber) {
   const chatId = Number(userId);
   const lesson = lessons[lessonNumber];
 
+  // пробуем получить видео из Firestore
+  const firestoreLesson = await db.collection("lessons").doc(String(lessonNumber)).get();
+  const videoId = firestoreLesson.exists ? firestoreLesson.data().video : null;
+
   if (!lesson) {
     await bot.telegram.sendMessage(chatId, "🎉 Все 90 уроков пройдены! Молодец!");
 
@@ -152,18 +157,32 @@ async function sendLesson(userId, lessonNumber) {
     return;
   }
 
-  const sentLesson = await bot.telegram.sendMessage(
-    chatId,
-    `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
-  );
+  let sentLesson;
+
+  if (videoId) {
+    // 🎬 если есть видео — отправляем видео
+    sentLesson = await bot.telegram.sendVideo(
+      chatId,
+      videoId,
+      {
+        caption: `📘 Урок ${lessonNumber}\n\n${lesson.lessonText || ""}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+      }
+    );
+  } else {
+    // 📄 если видео нет — отправляем текст, как раньше
+    sentLesson = await bot.telegram.sendMessage(
+      chatId,
+      `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+    );
+  }
 
   const u = (usersCache[userId] || await loadUser(userId)) || {};
   u.currentLesson = lessonNumber;
-  u.lastLessonMessageId = sentLesson.message_id;  // запоминаем ID урока
+  u.lastLessonMessageId = sentLesson.message_id;
   u.waitingAnswer = false;
   u.lastLessonAt = Date.now();
-  u.nextLessonAt = 0;                             // следующий урок назначим после ответа
-  u.nextQuestionAt = Date.now() + 60 * 60 * 1000; // вопрос через 1 час
+  u.nextLessonAt = 0;
+  u.nextQuestionAt = Date.now() + 60 * 60 * 1000;
 
   await saveUser(userId, u);
 }
@@ -716,6 +735,85 @@ bot.command("reset_lessons", async ctx => {
 });
 
 // ======================================================
+// /addvideo — добавить видео к уроку (только админ)
+// ======================================================
+bot.command("addvideo", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав загружать видео.");
+  }
+
+  const args = ctx.message.text.split(" ").slice(1);
+  if (!args[0]) {
+    return ctx.reply("Использование: /addvideo 21");
+  }
+
+  const lessonNumber = Number(args[0]);
+  if (isNaN(lessonNumber)) {
+    return ctx.reply("❌ Неверный номер урока. Пример: /addvideo 21");
+  }
+
+  tempVideoUpload[ctx.from.id] = { lesson: lessonNumber };
+
+  return ctx.reply(`🎬 Теперь отправьте видео для урока ${lessonNumber}`);
+});
+
+// ======================================================
+// Приём видео от админа для урока
+// ======================================================
+bot.on("video", async ctx => {
+  const userId = ctx.from.id;
+
+  // бот ждет видео?
+  if (!tempVideoUpload[userId]) return;
+
+  const lessonNumber = tempVideoUpload[userId].lesson;
+  const fileId = ctx.message.video.file_id;
+
+  // сохраняем в Firestore
+  await db.collection("lessons").doc(String(lessonNumber)).set(
+    { video: fileId },
+    { merge: true }
+  );
+
+  // очищаем состояние
+  delete tempVideoUpload[userId];
+
+  await ctx.reply(`✔ Видео сохранено для урока ${lessonNumber}`);
+});
+
+// ======================================================
+// /set_lesson — перейти к любому уроку (только админ)
+// ======================================================
+bot.command("set_lesson", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав использовать эту команду.");
+  }
+
+  const parts = ctx.message.text.split(" ");
+  const lessonNumber = Number(parts[1]);
+
+  if (!lessonNumber) {
+    return ctx.reply("Использование: /set_lesson 21");
+  }
+
+  const userId = ctx.from.id;
+  const u = usersCache[userId] || await loadUser(userId);
+
+  if (!u) return ctx.reply("❌ Пользователь не найден.");
+
+  // обновляем состояние
+  u.currentLesson = lessonNumber;
+  u.waitingAnswer = false;
+  u.nextLessonAt = 0;
+  u.nextQuestionAt = 0;
+
+  await saveUser(userId, u);
+
+  await ctx.reply(`🔄 Переход на урок ${lessonNumber}...`);
+  await sendLesson(userId, lessonNumber);
+});
+
+// ======================================================
 // РЕГИСТРАЦИЯ — имя
 // ======================================================
 
@@ -941,4 +1039,3 @@ if (WEBHOOK_URL) {
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
-//C3333tttt
