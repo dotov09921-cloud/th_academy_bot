@@ -734,6 +734,39 @@ bot.command("reset_lessons", async ctx => {
   }
 });
 
+bot.command("reset_lesson_for", async ctx => {
+  const adminId = ctx.from.id;
+  if (adminId !== OWNER_ID) {
+    return ctx.reply("❌ Нет доступа.");
+  }
+
+  const parts = ctx.message.text.trim().split(" ");
+  const targetId = parts[1];
+
+  if (!targetId) {
+    return ctx.reply("Использование: /reset_lesson_for USER_ID");
+  }
+
+  let u = await loadUser(targetId);
+  if (!u) {
+    return ctx.reply(`Пользователь ${targetId} не найден.`);
+  }
+
+  // сбрасываем таймер урока
+  u.nextLessonAt = 0;
+  u.waitingAnswer = false;
+
+  // включаем instant-режим, чтобы сразу пришёл вопрос
+  u.instant = true;
+
+  await saveUser(targetId, u);
+
+  // отправляем урок немедленно
+  await sendLesson(targetId, u.currentLesson || 1);
+
+  ctx.reply(`✔ Урок и таймеры сброшены для ${targetId}. Урок отправлен, вопрос придёт сразу.`);
+});
+
 // ======================================================
 // /addvideo — добавить видео к уроку (только админ)
 // ======================================================
@@ -1039,3 +1072,6 @@ if (WEBHOOK_URL) {
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
+// Добавить таймкод для тех, кто не может проходить уроки поздно 
+// Загрузить уроки с видео 
+// настроить старт для видео (чтобы выдавал снова урок с видео - если человек очистил чат с ботом)
