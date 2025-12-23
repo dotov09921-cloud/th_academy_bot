@@ -551,6 +551,39 @@ bot.command("stats", async ctx => {
   ctx.reply(text, { parse_mode: "Markdown" });
 });
 
+bot.command("force_q", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ Нет доступа.");
+  }
+
+  const args = ctx.message.text.trim().split(" ");
+  const targetId = args[1];
+
+  if (!targetId) {
+    return ctx.reply("Использование:\n/force_q USER_ID");
+  }
+
+  let u = await loadUser(targetId);
+  if (!u) {
+    return ctx.reply(`Пользователь с ID ${targetId} не найден.`);
+  }
+
+  if (!u.currentLesson) {
+    return ctx.reply(`У пользователя ${targetId} нет активного урока.`);
+  }
+
+  // Сбрасываем таймеры вопроса
+  u.nextQuestionAt = 0;
+  u.waitingAnswer = true;
+
+  await saveUser(targetId, u);
+
+  // Мгновенно отправляем вопрос
+  await sendQuestion(targetId, u.currentLesson);
+
+  ctx.reply(`✔ Вопрос по уроку ${u.currentLesson} отправлен пользователю ${targetId}.`);
+});
+
 // ======================================================
 // /pdf30 — простой PDF за 30 дней (только админ)
 // ======================================================
@@ -1072,6 +1105,3 @@ if (WEBHOOK_URL) {
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
-// Добавить таймкод для тех, кто не может проходить уроки поздно 
-// Загрузить уроки с видео 
-// настроить старт для видео (чтобы выдавал снова урок с видео - если человек очистил чат с ботом)
