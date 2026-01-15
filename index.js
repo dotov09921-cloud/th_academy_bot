@@ -988,7 +988,7 @@ bot.on("contact", async ctx => {
     role: null,
     correctCount: 0,
     wrongCount: 0,
-    lastLessonMessageId: null
+    lastLessonMessageId: null,
     lastExamLesson: 0,
     waitingExam: false,
     examQuestions: [],
