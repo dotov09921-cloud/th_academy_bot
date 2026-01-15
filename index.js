@@ -187,6 +187,67 @@ async function sendLesson(userId, lessonNumber) {
   await saveUser(userId, u);
 }
 
+
+// ======================================================
+// ЭКЗАМЕН — запуск
+// ======================================================
+async function startExam(userId, lessonLimit) {
+  const chatId = Number(userId);
+
+  const from = lessonLimit - 24; // диапазон 25 уроков
+  const to = lessonLimit;
+
+  // выбираем 10 случайных вопросов
+  const ids = [];
+  for (let i = 0; i < 10; i++) {
+    ids.push(Math.floor(Math.random() * (to - from + 1)) + from);
+  }
+
+  const u = usersCache[userId] || await loadUser(userId);
+
+  u.waitingExam = true;
+  u.examQuestions = ids;
+  u.examIndex = 0;
+  u.examScore = 0;
+
+  // отключаем обычные таймеры
+  u.waitingAnswer = false;
+  u.nextLessonAt = 0;
+  u.nextQuestionAt = 0;
+
+  await saveUser(userId, u);
+
+  await bot.telegram.sendMessage(
+    chatId,
+    `🎓 Экзамен по урокам ${from}–${to}!\nВсего вопросов: 10.\nНачинаем!`
+  );
+
+  await sendExamQuestion(userId);
+}
+
+// ======================================================
+// ЭКЗАМЕН — отправка 1 вопроса
+// ======================================================
+async function sendExamQuestion(userId) {
+  const u = usersCache[userId] || await loadUser(userId);
+  const chatId = Number(userId);
+
+  const lessonId = u.examQuestions[u.examIndex];
+  const lesson = lessons[lessonId];
+
+  const keyboard = Markup.inlineKeyboard(
+    lesson.buttons.map(b => [
+      Markup.button.callback(b[0], "exam_" + b[0])
+    ])
+  );
+
+  await bot.telegram.sendMessage(
+    chatId,
+    `❓ Экзамен • Вопрос ${u.examIndex + 1}/10\n\n${lesson.questionText}`,
+    keyboard
+  );
+}
+
 // ======================================================
 // ОТПРАВКА ВОПРОСА ПО УРОКУ (С УДАЛЕНИЕМ УРОКА)
 // ======================================================
@@ -928,6 +989,11 @@ bot.on("contact", async ctx => {
     correctCount: 0,
     wrongCount: 0,
     lastLessonMessageId: null
+    lastExamLesson: 0,
+    waitingExam: false,
+    examQuestions: [],
+    examIndex: 0,
+    examScore: 0,
   };
 
   await saveUser(userId, userState);
@@ -1015,7 +1081,53 @@ bot.on("callback_query", async ctx => {
   // роли уже обработаны в bot.action("role_...")
   if (answer.startsWith("role_")) return;
 
+  // === ОБРАБОТКА ОТВЕТОВ ЭКЗАМЕНА ===
+  if (answer.startsWith("exam_")) {
+    const userAnswer = answer.replace("exam_", "");
+    const u = usersCache[userId] || await loadUser(userId);
+
+    const lessonId = u.examQuestions[u.examIndex];
+    const lesson = lessons[lessonId];
+
+    if (userAnswer === lesson.correct) {
+      u.examScore++;
+      await ctx.reply("✅ Верно!");
+    } else {
+      await ctx.reply("❌ Ошибка.");
+    }
+
+    u.examIndex++;
+
+    // Экзамен завершен
+    if (u.examIndex >= u.examQuestions.length) {
+      const score = u.examScore;
+
+      u.waitingExam = false;
+      u.lastExamLesson = lessonId;
+
+      await ctx.reply(
+        `🎓 Экзамен завершен!\nРезультат: ${score} из 10 баллов.`
+      );
+
+      // Возобновляем обычные уроки
+      u.nextLessonAt = Date.now() + 3000;
+
+      await saveUser(userId, u);
+      return;
+    }
+
+    await saveUser(userId, u);
+    await sendExamQuestion(userId);
+    return;
+  }
+
   const u = usersCache[userId] || await loadUser(userId);
+  // === ИНИЦИАЛИЗАЦИЯ ПОЛЕЙ ЭКЗАМЕНА (для старых пользователей) ===
+  if (u.lastExamLesson === undefined) u.lastExamLesson = 0;
+  if (u.waitingExam === undefined) u.waitingExam = false;
+  if (!Array.isArray(u.examQuestions)) u.examQuestions = [];
+  if (u.examIndex === undefined) u.examIndex = 0;
+  if (u.examScore === undefined) u.examScore = 0;
   if (!u || !u.waitingAnswer) return;
 
   const lesson = lessons[u.currentLesson];
@@ -1036,6 +1148,16 @@ bot.on("callback_query", async ctx => {
     }
 
     u.currentLesson = (u.currentLesson || 1) + 1;
+    // === ТРИГГЕР ЭКЗАМЕНА КАЖДЫЕ 25 УРОКОВ ===
+    if (
+      u.currentLesson % 25 === 1 &&          // 26, 51, 76 → значит завершено 25 уроков
+      u.lastExamLesson < u.currentLesson - 1 && // чтобы не повторять экзамен
+      !u.waitingExam                            // чтобы не наложился
+    ) {
+      await startExam(userId, u.currentLesson - 1); // экзамен по урокам (1–25), (26–50), …
+      await saveUser(userId, u);
+      return; // останавливаем обычную логику, запускаем экзамен
+    }
     u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // следующий урок через 24 часа
     u.nextQuestionAt = 0; // вопрос назначим после нового урока
 
