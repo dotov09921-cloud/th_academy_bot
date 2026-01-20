@@ -8,11 +8,32 @@ const fs = require('fs');
 const path = require('path');
 const lessons = require('./lessons');
 
-process.on("unhandledRejection", err => {
+process.on("unhandledRejection", async err => {
   if (err?.response?.error_code === 403) {
-    console.log("⚠ Игнорируем 403 — пользователь заблокировал бота");
+    const userId = err.response.parameters?.migrate_to_chat_id 
+      || err.on?.payload?.chat_id 
+      || err.on?.payload?.from?.id 
+      || err.on?.from?.id 
+      || null;
+
+    console.log("⚠️ Игнорируем 403 — пользователь заблокировал бота", userId);
+
+    if (userId) {
+      try {
+        await db.collection("blocked_users").doc(String(userId)).set({
+          blocked: true,
+          ts: Date.now()
+        });
+
+        console.log(`✔️ Добавлен в список заблокировавших: ${userId}`);
+      } catch (e) {
+        console.log("Ошибка записи blocked_users:", e);
+      }
+    }
+
     return;
   }
+
   console.error("❌ Необработанная ошибка:", err);
 });
 
