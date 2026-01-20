@@ -37,6 +37,30 @@ process.on("unhandledRejection", async err => {
   console.error("❌ Необработанная ошибка:", err);
 });
 
+bot.catch(async (err, ctx) => {
+  const userId =
+    ctx?.from?.id ||
+    ctx?.chat?.id ||
+    err?.on?.payload?.chat_id ||
+    err?.on?.payload?.from?.id ||
+    null;
+
+  if (String(err).includes("403") || String(err).includes("bot was blocked")) {
+    console.log("🚫 Пользователь заблокировал бота:", userId);
+
+    if (userId) {
+      await db.collection("blocked_users").doc(String(userId)).set({
+        blocked: true,
+        ts: Date.now()
+      });
+    }
+
+    return; // важно — не ронять бота
+  }
+
+  console.error("❌ Ошибка в боте:", err);
+});
+
 // ======================================================
 // FIREBASE
 // ======================================================
