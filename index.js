@@ -8,6 +8,14 @@ const fs = require('fs');
 const path = require('path');
 const lessons = require('./lessons');
 
+process.on("unhandledRejection", err => {
+  if (err?.response?.error_code === 403) {
+    console.log("⚠ Игнорируем 403 — пользователь заблокировал бота");
+    return;
+  }
+  console.error("❌ Необработанная ошибка:", err);
+});
+
 // ======================================================
 // FIREBASE
 // ======================================================
@@ -1226,4 +1234,3 @@ if (WEBHOOK_URL) {
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-
