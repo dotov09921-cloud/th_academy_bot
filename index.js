@@ -1279,7 +1279,7 @@ setInterval(async () => {
     if (u.waitingAnswer) continue;
 
     // 1) сначала вопрос (важнее)
-    if (u.nextQuestionAt && now >= u.nextQuestionAt) {
+     if (u.nextQuestionAt && now >= u.nextQuestionAt) {
       await sendQuestion(userId, u.currentLesson || 1);
       continue;
     }
@@ -1290,6 +1290,56 @@ setInterval(async () => {
     }
   }
 }, 20000);
+
+// ======================================================
+// ЕЖЕДНЕВНАЯ ОТПРАВКА УРОКОВ В 12:00
+// ======================================================
+
+async function sendLessonsAt12() {
+  console.log("⏰ Запуск массовой рассылки уроков (12:00)");
+
+  const snapshot = await db.collection("users").get();
+
+  for (const doc of snapshot.docs) {
+    const userId = doc.id;
+    const u = doc.data();
+
+    // пропускаем закончивших обучение
+    if (u.finished) continue;
+
+    // если у пользователя есть активный вопрос — урок не шлём
+    if (u.waitingAnswer) continue;
+
+    // отправляем урок
+    await sendLesson(userId, u.currentLesson || 1);
+  }
+}
+
+// вычисляет время до 12:00 по МСК
+function msUntil12() {
+  const now = new Date();
+  const target = new Date();
+
+  target.setHours(12, 0, 0, 0);
+
+  if (now > target) {
+    // если уже позже 12 — переносим на завтра
+    target.setDate(target.getDate() + 1);
+  }
+
+  return target - now;
+}
+
+// первый запуск — когда наступит 12:00
+setTimeout(() => {
+  sendLessonsAt12();
+
+  // затем каждый день ровно в 12:00
+  setInterval(sendLessonsAt12, 24 * 60 * 60 * 1000);
+
+}, msUntil12());
+
+console.log("⏳ Таймер на 12:00 активирован. Ждём следующего запуска.");
 
 // ======================================================
 // WEBHOOK / POLLING
