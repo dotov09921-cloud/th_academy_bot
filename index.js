@@ -8,58 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lessons = require('./lessons');
 
-process.on("unhandledRejection", async err => {
-  if (err?.response?.error_code === 403) {
-    const userId = err.response.parameters?.migrate_to_chat_id 
-      || err.on?.payload?.chat_id 
-      || err.on?.payload?.from?.id 
-      || err.on?.from?.id 
-      || null;
 
-    console.log("⚠️ Игнорируем 403 — пользователь заблокировал бота", userId);
-
-    if (userId) {
-      try {
-        await db.collection("blocked_users").doc(String(userId)).set({
-          blocked: true,
-          ts: Date.now()
-        });
-
-        console.log(`✔️ Добавлен в список заблокировавших: ${userId}`);
-      } catch (e) {
-        console.log("Ошибка записи blocked_users:", e);
-      }
-    }
-
-    return;
-  }
-
-  console.error("❌ Необработанная ошибка:", err);
-});
-
-bot.catch(async (err, ctx) => {
-  const userId =
-    ctx?.from?.id ||
-    ctx?.chat?.id ||
-    err?.on?.payload?.chat_id ||
-    err?.on?.payload?.from?.id ||
-    null;
-
-  if (String(err).includes("403") || String(err).includes("bot was blocked")) {
-    console.log("🚫 Пользователь заблокировал бота:", userId);
-
-    if (userId) {
-      await db.collection("blocked_users").doc(String(userId)).set({
-        blocked: true,
-        ts: Date.now()
-      });
-    }
-
-    return; // важно — не ронять бота
-  }
-
-  console.error("❌ Ошибка в боте:", err);
-});
 
 // ======================================================
 // FIREBASE
@@ -1292,54 +1241,43 @@ setInterval(async () => {
 }, 20000);
 
 // ======================================================
-// ЕЖЕДНЕВНАЯ ОТПРАВКА УРОКОВ В 12:00
+// КАЖДЫЙ ДЕНЬ В 12:12 — ОТПРАВИТЬ УРОК ВСЕМ
 // ======================================================
 
-async function sendLessonsAt12() {
-  console.log("⏰ Запуск массовой рассылки уроков (12:00)");
-
-  const snapshot = await db.collection("users").get();
-
-  for (const doc of snapshot.docs) {
-    const userId = doc.id;
-    const u = doc.data();
-
-    // пропускаем закончивших обучение
-    if (u.finished) continue;
-
-    // если у пользователя есть активный вопрос — урок не шлём
-    if (u.waitingAnswer) continue;
-
-    // отправляем урок
-    await sendLesson(userId, u.currentLesson || 1);
-  }
-}
-
-// вычисляет время до 12:00 по МСК
-function msUntil12() {
+setInterval(async () => {
   const now = new Date();
-  const target = new Date();
 
-  target.setHours(12, 0, 0, 0);
+  const hh = now.getHours();
+  const mm = now.getMinutes();
 
-  if (now > target) {
-    // если уже позже 12 — переносим на завтра
-    target.setDate(target.getDate() + 1);
+  // Срабатывает ровно в 12:12
+  if (hh === 12 && mm === 12) {
+    console.log("⏰ Запуск массовой отправки уроков на 12:12");
+
+    const snapshot = await db.collection("users").get();
+
+    for (const doc of snapshot.docs) {
+      const userId = doc.id;
+      const u = doc.data();
+
+      // игнорируем завершивших
+      if (u.finished) continue;
+
+      // не трогаем тех, кто ждёт вопрос
+      if (u.waitingAnswer) continue;
+
+      // не трогаем экзаменующихся
+      if (u.waitingExam) continue;
+
+      try {
+        await sendLesson(userId, u.currentLesson || 1);
+        console.log("✔ Урок отправлен пользователю", userId);
+      } catch (e) {
+        console.log("⚠ Ошибка отправки пользователю", userId, e.message);
+      }
+    }
   }
-
-  return target - now;
-}
-
-// первый запуск — когда наступит 12:00
-setTimeout(() => {
-  sendLessonsAt12();
-
-  // затем каждый день ровно в 12:00
-  setInterval(sendLessonsAt12, 24 * 60 * 60 * 1000);
-
-}, msUntil12());
-
-console.log("⏳ Таймер на 12:00 активирован. Ждём следующего запуска.");
+}, 60 * 1000); // проверяем каждую минуту
 
 // ======================================================
 // WEBHOOK / POLLING
