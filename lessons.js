@@ -1478,6 +1478,6 @@ module.exports = {
   ],
   
   correct: "1. Мусор"
-},
+}
 
 };
