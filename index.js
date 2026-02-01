@@ -890,6 +890,35 @@ bot.command("reset_lesson_for", async ctx => {
   ctx.reply(`✔ Урок и таймеры сброшены для ${targetId}. Урок отправлен, вопрос придёт сразу.`);
 });
 
+bot.command("unfinish", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ Нет доступа.");
+  }
+
+  const parts = ctx.message.text.trim().split(" ");
+  const targetId = parts[1];
+
+  if (!targetId) {
+    return ctx.reply("Использование: /unfinish USER_ID");
+  }
+
+  const u = await loadUser(targetId);
+  if (!u) {
+    return ctx.reply(`❌ Пользователь ${targetId} не найден.`);
+  }
+
+  // снимаем состояние завершённого обучения
+  await saveUser(targetId, {
+    finished: false,
+    waitingAnswer: false,
+    nextLessonAt: 0,
+    nextQuestionAt: 0
+  });
+
+  ctx.reply(`✔ Обучение снова включено для пользователя ${targetId}. Он продолжит уроки.`);
+});
+
+
 // ======================================================
 // /addvideo — добавить видео к уроку (только админ)
 // ======================================================
