@@ -1277,7 +1277,11 @@ setInterval(async () => {
 // ФИКСИРОВАННАЯ ОТПРАВКА ВОПРОСОВ В 12:12 МСК
 // ======================================================
 
-let lastDailyRun = null;
+// ======================================================
+// ФИКСИРОВАННАЯ ОТПРАВКА ТЕМ (УРОКОВ) В 12:12 МСК
+// ======================================================
+
+let lastDailyLessonRun = null;
 
 setInterval(async () => {
   const now = new Date();
@@ -1288,13 +1292,13 @@ setInterval(async () => {
 
   console.log("⏱ CHECK MSK TIME:", hour, minute);
 
-  if (hour !== 23 || minute !== 27) return;
+  if (hour !== 12 || minute !== 12) return;
 
   const today = now.toISOString().slice(0, 10);
-  if (lastDailyRun === today) return;
-  lastDailyRun = today;
+  if (lastDailyLessonRun === today) return;
+  lastDailyLessonRun = today;
 
-  console.log("📘 DAILY QUESTION TRIGGER 12:12 MSK");
+  console.log("📘 DAILY LESSON TRIGGER 12:12 MSK");
 
   const snapshot = await db.collection("users").get();
 
@@ -1303,30 +1307,33 @@ setInterval(async () => {
     const u = doc.data();
 
     try {
-      // ❌ завершил обучение
+      // ❌ закончил обучение
       if (u.finished) continue;
 
       // ❌ идёт экзамен
       if (u.waitingExam) continue;
 
-      // ❌ уже есть активный вопрос
+      // ❌ есть активный вопрос
       if (u.waitingAnswer) continue;
 
       // ❌ нет урока
       if (!u.currentLesson) continue;
 
-      // ❌ ждёт повтор урока за ошибку (30 минут)
+      // ❌ повтор за ошибку (30 минут)
       if (u.nextLessonAt && (u.nextLessonAt - Date.now()) < 60 * 60 * 1000) {
         continue;
       }
 
-      // ✅ ждёт 24 часа за правильный ответ → шлём ВОПРОС
-      if (u.nextLessonAt && (u.nextLessonAt - Date.now()) >= 20 * 60 * 60 * 1000) {
-        await sendQuestion(userId, u.currentLesson);
+      // ❌ если тема уже отправлялась и вопрос ещё не пришёл
+      if (u.nextQuestionAt && u.nextQuestionAt > Date.now()) {
+        continue;
       }
 
+      // ✅ ОТПРАВЛЯЕМ ТЕМУ
+      await sendLesson(userId, u.currentLesson);
+
     } catch (err) {
-      console.log(`⚠️ Не удалось отправить вопрос ${userId}:`, err.message);
+      console.log(`⚠️ Не удалось отправить урок ${userId}:`, err.message);
     }
   }
 }, 30 * 1000);
