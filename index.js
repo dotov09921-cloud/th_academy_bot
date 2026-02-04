@@ -1290,7 +1290,7 @@ setInterval(async () => {
   console.log("⏱ CHECK MSK TIME:", hour, minute);
 
   // === СТРОГО 12:12 МСК ===
-  if (hour !== 23 || minute !== 10) return;
+  if (hour !== 23 || minute !== 18) return;
 
   const today = now.toISOString().slice(0, 10);
   if (lastDailyLessonRun === today) return; // защита от повторов
@@ -1319,7 +1319,7 @@ setInterval(async () => {
       if (u.waitingAnswer) continue;
 
       // если уже есть активная тема
-      if (u.nextQuestionAt && u.nextQuestionAt > Date.now()) continue;
+      // if (u.nextQuestionAt && u.nextQuestionAt > Date.now()) continue;
 
       // если есть таймер урока (ошибка / повтор)
       if (u.nextLessonAt && u.nextLessonAt > Date.now()) continue;
