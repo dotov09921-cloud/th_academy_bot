@@ -1286,13 +1286,13 @@ setInterval(async () => {
   console.log("⏱ CHECK MSK TIME:", hour, minute);
 
   // === ТОЛЬКО В 12:12 МСК ===
-  if (hour !== 12 || minute !== 12) return;
+  if (hour !== 22 || minute !== 59) return;
 
   const today = now.toISOString().slice(0, 10);
   if (lastDailyRun === today) return; // защита от повторов
   lastDailyRun = today;
 
-  console.log("📘 DAILY QUESTION TRIGGER 12:12 MSK");
+  console.log("📘 DAILY LESSON TRIGGER 12:12 MSK");
 
   const snapshot = await db.collection("users").get();
 
@@ -1313,9 +1313,9 @@ setInterval(async () => {
       // ❌ если нет активного урока
       if (!u.currentLesson) continue;
 
-      await sendQuestion(userId, u.currentLesson);
+      await sendLesson(userId, u.currentLesson);
     } catch (err) {
-      console.log(`⚠️ Не удалось отправить вопрос ${userId}:`, err.message);
+      console.log(`⚠️ Не удалось отправить урок ${userId}:`, err.message);
     }
   }
 }, 30 * 1000); // проверка каждые 30 секунд
