@@ -7,7 +7,7 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const lessons = require('./lessons');
-const cron = require("node-cron");
+// const cron = require("node-cron");
 
 
 // ======================================================
@@ -1269,34 +1269,39 @@ setInterval(async () => {
   }
 }, 20000);
 
-// ======================================================
-// CRON — ежедневная отправка урока в 12:12
-// ======================================================
+setInterval(async () => {
+  const now = new Date();
+  const hh = now.getHours();
+  const mm = now.getMinutes();
 
-cron.schedule("12 12 * * *", async () => {
-  console.log("⏰ CRON 12:12 — запускаем массовую отправку уроков!");
+  console.log("⏱ CHECK TIME", hh, mm);
 
-  const snapshot = await db.collection("users").get();
+  // 🔔 Срабатывает ОДИН раз в минуту в 12:12
+  if (hh === 12 && mm === 12) {
+    console.log("📘 TRIGGER 12:12");
 
-  for (const doc of snapshot.docs) {
-    const u = doc.data();
-    const userId = doc.id;
+    const snapshot = await db.collection("users").get();
 
-    // пропускаем завершивших
-    if (u.finished) continue;
+    for (const doc of snapshot.docs) {
+      const userId = doc.id;
+      const u = doc.data();
 
-    // пропускаем, если висит вопрос
-    if (u.waitingAnswer) continue;
+      // ❌ защита от дублей и поломок
+      if (
+        u.finished ||
+        u.waitingAnswer ||
+        u.waitingExam ||
+        (u.nextLessonAt && u.nextLessonAt > Date.now())
+      ) continue;
 
-    // пропускаем, если экзамен
-    if (u.waitingExam) continue;
-
-    // отправляем очередной урок
-    await sendLesson(userId, u.currentLesson || 1);
-
-    console.log("Отправлен урок пользователю:", userId);
+      try {
+        await sendLesson(userId, u.currentLesson || 1);
+      } catch (e) {
+        console.log("⚠️ Не удалось отправить урок:", userId, e.message);
+      }
+    }
   }
-});
+}, 60 * 1000); // раз в минуту
 
 // ======================================================
 // WEBHOOK / POLLING
