@@ -1269,39 +1269,56 @@ setInterval(async () => {
   }
 }, 20000);
 
+// ======================================================
+// ФИКСИРОВАННАЯ ОТПРАВКА ВОПРОСОВ В 12:12 МСК
+// ======================================================
+
+let lastDailyRun = null;
+
 setInterval(async () => {
   const now = new Date();
-  const hh = now.getHours();
-  const mm = now.getMinutes();
 
-  console.log("⏱ CHECK TIME", hh, mm);
+  // 👉 переводим UTC → MSK
+  const hour = (now.getUTCHours() + 3) % 24;
+  const minute = now.getUTCMinutes();
 
-  // 🔔 Срабатывает ОДИН раз в минуту в 12:12
-  if (hh === 12 && mm === 12) {
-    console.log("📘 TRIGGER 12:12");
+  // лог для проверки
+  console.log("⏱ CHECK MSK TIME:", hour, minute);
 
-    const snapshot = await db.collection("users").get();
+  // === ТОЛЬКО В 12:12 МСК ===
+  if (hour !== 12 || minute !== 12) return;
 
-    for (const doc of snapshot.docs) {
-      const userId = doc.id;
-      const u = doc.data();
+  const today = now.toISOString().slice(0, 10);
+  if (lastDailyRun === today) return; // защита от повторов
+  lastDailyRun = today;
 
-      // ❌ защита от дублей и поломок
-      if (
-        u.finished ||
-        u.waitingAnswer ||
-        u.waitingExam ||
-        (u.nextLessonAt && u.nextLessonAt > Date.now())
-      ) continue;
+  console.log("📘 DAILY QUESTION TRIGGER 12:12 MSK");
 
-      try {
-        await sendLesson(userId, u.currentLesson || 1);
-      } catch (e) {
-        console.log("⚠️ Не удалось отправить урок:", userId, e.message);
-      }
+  const snapshot = await db.collection("users").get();
+
+  for (const doc of snapshot.docs) {
+    const userId = doc.id;
+    const u = doc.data();
+
+    try {
+      // ❌ не трогаем завершивших
+      if (u.finished) continue;
+
+      // ❌ если идёт экзамен
+      if (u.waitingExam) continue;
+
+      // ❌ если уже ждёт ответ
+      if (u.waitingAnswer) continue;
+
+      // ❌ если нет активного урока
+      if (!u.currentLesson) continue;
+
+      await sendQuestion(userId, u.currentLesson);
+    } catch (err) {
+      console.log(`⚠️ Не удалось отправить вопрос ${userId}:`, err.message);
     }
   }
-}, 60 * 1000); // раз в минуту
+}, 30 * 1000); // проверка каждые 30 секунд
 
 // ======================================================
 // WEBHOOK / POLLING
