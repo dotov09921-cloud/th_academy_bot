@@ -1274,29 +1274,27 @@ setInterval(async () => {
 // ======================================================
 
 // ======================================================
-// ФИКСИРОВАННАЯ ОТПРАВКА УРОКОВ В 12:12 МСК
+// ФИКСИРОВАННАЯ ОТПРАВКА ВОПРОСОВ В 12:12 МСК
 // ======================================================
 
-let lastDailyLessonRun = null;
+let lastDailyRun = null;
 
 setInterval(async () => {
   const now = new Date();
 
-  // 👉 UTC → MSK
+  // UTC → MSK
   const hour = (now.getUTCHours() + 3) % 24;
   const minute = now.getUTCMinutes();
 
-  // лог для контроля
   console.log("⏱ CHECK MSK TIME:", hour, minute);
 
-  // === СТРОГО 12:12 МСК ===
-  if (hour !== 23 || minute !== 18) return;
+  if (hour !== 23 || minute !== 27) return;
 
   const today = now.toISOString().slice(0, 10);
-  if (lastDailyLessonRun === today) return; // защита от повторов
-  lastDailyLessonRun = today;
+  if (lastDailyRun === today) return;
+  lastDailyRun = today;
 
-  console.log("📘 DAILY LESSON TRIGGER 12:12 MSK");
+  console.log("📘 DAILY QUESTION TRIGGER 12:12 MSK");
 
   const snapshot = await db.collection("users").get();
 
@@ -1305,40 +1303,33 @@ setInterval(async () => {
     const u = doc.data();
 
     try {
-      // ==============================
-      // ❌ ЖЁСТКИЕ БЛОКИРОВКИ
-      // ==============================
-
-      if (!u || !u.verified) continue;
+      // ❌ завершил обучение
       if (u.finished) continue;
 
-      // если идёт экзамен
+      // ❌ идёт экзамен
       if (u.waitingExam) continue;
 
-      // если ждём ответ на вопрос
+      // ❌ уже есть активный вопрос
       if (u.waitingAnswer) continue;
 
-      // если уже есть активная тема
-      // if (u.nextQuestionAt && u.nextQuestionAt > Date.now()) continue;
-
-      // если есть таймер урока (ошибка / повтор)
-      if (u.nextLessonAt && u.nextLessonAt > Date.now()) continue;
-
-      // если нет текущего урока
+      // ❌ нет урока
       if (!u.currentLesson) continue;
 
-      // ==============================
-      // ✅ ВСЁ ЧИСТО — ОТПРАВЛЯЕМ УРОК
-      // ==============================
-      await sendLesson(userId, u.currentLesson);
-      console.log(`📘 Урок отправлен пользователю ${userId}`);
+      // ❌ ждёт повтор урока за ошибку (30 минут)
+      if (u.nextLessonAt && (u.nextLessonAt - Date.now()) < 60 * 60 * 1000) {
+        continue;
+      }
+
+      // ✅ ждёт 24 часа за правильный ответ → шлём ВОПРОС
+      if (u.nextLessonAt && (u.nextLessonAt - Date.now()) >= 20 * 60 * 60 * 1000) {
+        await sendQuestion(userId, u.currentLesson);
+      }
 
     } catch (err) {
-      console.log(`⚠️ Ошибка отправки урока ${userId}:`, err.message);
+      console.log(`⚠️ Не удалось отправить вопрос ${userId}:`, err.message);
     }
   }
-
-}, 30 * 1000); // проверка каждые 30 секунд
+}, 30 * 1000);
 
 // ======================================================
 // WEBHOOK / POLLING
