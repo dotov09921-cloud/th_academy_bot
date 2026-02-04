@@ -1286,7 +1286,7 @@ setInterval(async () => {
   console.log("⏱ CHECK MSK TIME:", hour, minute);
 
   // === ТОЛЬКО В 12:12 МСК ===
-  if (hour !== 22 || minute !== 45) return;
+  if (hour !== 12 || minute !== 12) return;
 
   const today = now.toISOString().slice(0, 10);
   if (lastDailyRun === today) return; // защита от повторов
