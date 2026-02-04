@@ -1292,7 +1292,7 @@ setInterval(async () => {
 
   console.log("⏱ CHECK MSK TIME:", hour, minute);
 
-  if (hour !== 12 || minute !== 12) return;
+  if (hour !== 23 || minute !== 47) return;
 
   const today = now.toISOString().slice(0, 10);
   if (lastDailyLessonRun === today) return;
