@@ -7,7 +7,7 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const lessons = require('./lessons');
-
+const cron = require("node-cron");
 
 
 // ======================================================
@@ -1270,43 +1270,33 @@ setInterval(async () => {
 }, 20000);
 
 // ======================================================
-// КАЖДЫЙ ДЕНЬ В 12:12 — ОТПРАВИТЬ УРОК ВСЕМ
+// CRON — ежедневная отправка урока в 12:12
 // ======================================================
 
-setInterval(async () => {
-  const now = new Date();
+cron.schedule("12 12 * * *", async () => {
+  console.log("⏰ CRON 12:12 — запускаем массовую отправку уроков!");
 
-  const hh = now.getHours();
-  const mm = now.getMinutes();
+  const snapshot = await db.collection("users").get();
 
-  // Срабатывает ровно в 12:12
-  if (hh === 12 && mm === 12) {
-    console.log("⏰ Запуск массовой отправки уроков на 12:12");
+  for (const doc of snapshot.docs) {
+    const u = doc.data();
+    const userId = doc.id;
 
-    const snapshot = await db.collection("users").get();
+    // пропускаем завершивших
+    if (u.finished) continue;
 
-    for (const doc of snapshot.docs) {
-      const userId = doc.id;
-      const u = doc.data();
+    // пропускаем, если висит вопрос
+    if (u.waitingAnswer) continue;
 
-      // игнорируем завершивших
-      if (u.finished) continue;
+    // пропускаем, если экзамен
+    if (u.waitingExam) continue;
 
-      // не трогаем тех, кто ждёт вопрос
-      if (u.waitingAnswer) continue;
+    // отправляем очередной урок
+    await sendLesson(userId, u.currentLesson || 1);
 
-      // не трогаем экзаменующихся
-      if (u.waitingExam) continue;
-
-      try {
-        await sendLesson(userId, u.currentLesson || 1);
-        console.log("✔ Урок отправлен пользователю", userId);
-      } catch (e) {
-        console.log("⚠ Ошибка отправки пользователю", userId, e.message);
-      }
-    }
+    console.log("Отправлен урок пользователю:", userId);
   }
-}, 60 * 1000); // проверяем каждую минуту
+});
 
 // ======================================================
 // WEBHOOK / POLLING
