@@ -50,6 +50,7 @@ app.get("/ping", (req, res) => {
 // Главная клавиатура
 const mainKeyboard = Markup.keyboard([
   ["▶️ Старт"],
+  ["📚 Пройденные темы"],
   ["Итог ⭐", "Рейтинг 🏆"],
   ["⏳ Осталось времени"]
 ]).resize();
@@ -317,6 +318,13 @@ async function handleStart(ctx) {
 
   await ctx.reply("Меню:", mainKeyboard);
 
+  // сброс режима библиотеки
+  const cached = usersCache[userId] || saved || null;
+  if (cached?.readingLibrary) {
+    cached.readingLibrary = false;
+    await saveUser(userId, { readingLibrary: false });
+  }
+
   if (saved && saved.verified) {
     usersCache[userId] = saved;
 
@@ -458,6 +466,32 @@ bot.hears("⏳ Осталось времени", async ctx => {
   }
 
   await ctx.reply(parts.join("\n\n"));
+});
+
+bot.hears("📚 Пройденные темы", async ctx => {
+  const userId = ctx.from.id;
+  const u = usersCache[userId] || await loadUser(userId);
+
+  if (!u || !u.verified) {
+    return ctx.reply("Сначала нажми ▶️ Старт");
+  }
+
+  const maxLesson = (u.currentLesson || 1) - 1;
+
+  if (maxLesson <= 0) {
+    return ctx.reply("Ты ещё не прошёл ни одного урока.");
+  }
+
+  await ctx.reply(
+    `📚 *Пройденные темы*\n\n` +
+    `Ты прошёл уроки: *1–${maxLesson}*\n\n` +
+    `Напиши номер урока, который хочешь перечитать`,
+    { parse_mode: "Markdown" }
+  );
+
+  // включаем режим библиотеки
+  u.readingLibrary = true;
+  await saveUser(userId, u);
 });
 
 // ======================================================
@@ -996,6 +1030,41 @@ bot.command("set_lesson", async ctx => {
 
   await ctx.reply(`🔄 Переход на урок ${lessonNumber}...`);
   await sendLesson(userId, lessonNumber);
+});
+
+// ======================================================
+// БИБЛИОТЕКА ПРОЙДЕННЫХ УРОКОВ — ввод номера урока
+// ======================================================
+
+bot.on("text", async ctx => {
+  const userId = ctx.from.id;
+  const text = ctx.message.text.trim();
+
+  const u = usersCache[userId] || await loadUser(userId);
+
+  // если не в режиме библиотеки — не мешаем остальной логике
+  if (!u?.readingLibrary) return;
+
+  const lessonNumber = Number(text);
+
+  if (!lessonNumber || !lessons[lessonNumber]) {
+    return ctx.reply("❌ Введи корректный номер урока");
+  }
+
+  // урок считается пройденным, если он меньше текущего
+  if (lessonNumber >= (u.currentLesson || 1)) {
+    return ctx.reply("⛔ Этот урок ещё не пройден");
+  }
+
+  // отправляем полный текст
+  await ctx.reply(
+    `📘 *Урок ${lessonNumber}*\n\n${lessons[lessonNumber].lessonText}`,
+    { parse_mode: "Markdown" }
+  );
+
+  // выключаем режим библиотеки
+  u.readingLibrary = false;
+  await saveUser(userId, u);
 });
 
 // ======================================================
