@@ -51,6 +51,7 @@ app.get("/ping", (req, res) => {
 const mainKeyboard = Markup.keyboard([
   ["▶️ Старт"],
   ["📚 Пройденные темы"],
+  ["🛠 Техподдержка"],
   ["Итог ⭐", "Рейтинг 🏆"],
   ["⏳ Осталось времени"]
 ]).resize();
@@ -476,6 +477,28 @@ bot.hears("⏳ Осталось времени", async ctx => {
   await ctx.reply(parts.join("\n\n"));
 });
 
+// ======================================================
+// ТЕХПОДДЕРЖКА — ВХОД
+// ======================================================
+
+bot.hears("🛠 Техподдержка", async ctx => {
+  const userId = ctx.from.id;
+  const u = usersCache[userId] || await loadUser(userId);
+
+  if (!u || !u.verified) {
+    return ctx.reply("Сначала нажми ▶️ Старт и пройди регистрацию.");
+  }
+
+  await saveUser(userId, { supportMode: true });
+
+  await ctx.reply(
+    "🛠 *Техподдержка*\n\n" +
+    "Опишите вашу проблему одним сообщением.\n" +
+    "Мы ответим вам в ближайшее время.",
+    { parse_mode: "Markdown" }
+  );
+});
+
 bot.hears("📚 Пройденные темы", async ctx => {
   const userId = ctx.from.id;
   const u = usersCache[userId] || await loadUser(userId);
@@ -860,6 +883,34 @@ bot.command("pdf_full", async ctx => {
 });
 
 // ======================================================
+// /reply USER_ID текст — ответ пользователю
+// ======================================================
+
+bot.command("reply", async ctx => {
+  if (ctx.from.id !== OWNER_ID) return;
+
+  const parts = ctx.message.text.split(" ");
+  const targetId = parts[1];
+  const message = parts.slice(2).join(" ");
+
+  if (!targetId || !message) {
+    return ctx.reply("Использование:\n/reply USER_ID текст ответа");
+  }
+
+  try {
+    await ctx.telegram.sendMessage(
+      targetId,
+      `🛠 *Ответ техподдержки*\n\n${message}`,
+      { parse_mode: "Markdown" }
+    );
+
+    ctx.reply("✅ Ответ отправлен.");
+  } catch (err) {
+    ctx.reply("❌ Не удалось отправить сообщение пользователю.");
+  }
+});
+
+// ======================================================
 // /reset_lessons — сбросить уроки и начать с 1-го (только админ)
 // ======================================================
 
@@ -1103,6 +1154,40 @@ bot.on("text", async ctx => {
     );
   }
 });
+
+const userId = ctx.from.id;
+  const text = ctx.message.text.trim();
+
+  const u = usersCache[userId] || await loadUser(userId);
+
+  // ======================================================
+  // ТЕХПОДДЕРЖКА — ПРИЁМ СООБЩЕНИЯ
+  // ======================================================
+  if (u?.supportMode) {
+    await saveUser(userId, { supportMode: false });
+
+    // сохраняем сообщение
+    await db.collection("support").add({
+      userId: String(userId),
+      name: u.name || "-",
+      text,
+      ts: Date.now()
+    });
+
+    // отправляем админу
+    await ctx.telegram.sendMessage(
+      OWNER_ID,
+      `🛠 *Техподдержка*\n\n` +
+      `👤 ${u.name || "Без имени"}\n` +
+      `🆔 ${userId}\n\n` +
+      `✉️ ${text}`,
+      { parse_mode: "Markdown" }
+    );
+
+    await ctx.reply("✅ Сообщение отправлено в техподдержку.");
+
+    return; // ⛔ ОБЯЗАТЕЛЬНО
+  }
 
 // ======================================================
 // РЕГИСТРАЦИЯ — телефон
