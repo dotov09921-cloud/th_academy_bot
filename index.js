@@ -882,6 +882,45 @@ bot.command("pdf_full", async ctx => {
   }
 });
 
+bot.command("support_close", async ctx => {
+  if (ctx.from.id !== OWNER_ID) return;
+
+  const parts = ctx.message.text.split(" ");
+  const ticketId = parts[1];
+
+  if (!ticketId) {
+    return ctx.reply("Использование:\n/support_close TICKET_ID");
+  }
+
+  const ref = db.collection("support").doc(ticketId);
+  const doc = await ref.get();
+
+  if (!doc.exists) {
+    return ctx.reply("❌ Тикет не найден.");
+  }
+
+  const t = doc.data();
+  if (t.status === "CLOSED") {
+    return ctx.reply("ℹ️ Этот тикет уже закрыт.");
+  }
+
+  await ref.set({
+    status: "CLOSED",
+    closedAt: Date.now(),
+    closedBy: String(ctx.from.id)
+  }, { merge: true });
+
+  // можно уведомить пользователя
+  try {
+    await ctx.telegram.sendMessage(
+      Number(t.userId),
+      "✅ Ваше обращение в техподдержку закрыто. Если проблема актуальна — напишите снова через 🛠 Техподдержка."
+    );
+  } catch {}
+
+  return ctx.reply(`✅ Тикет ${ticketId} закрыт.`);
+});
+
 // ======================================================
 // /reply USER_ID текст — ответ пользователю
 // ======================================================
@@ -909,6 +948,74 @@ bot.command("reply", async ctx => {
     ctx.reply("❌ Не удалось отправить сообщение пользователю.");
   }
 });
+
+bot.command("support_reply", async ctx => {
+  if (ctx.from.id !== OWNER_ID) return;
+
+  const parts = ctx.message.text.split(" ");
+  const ticketId = parts[1];
+  const message = parts.slice(2).join(" ").trim();
+
+  if (!ticketId || !message) {
+    return ctx.reply("Использование:\n/support_reply TICKET_ID текст");
+  }
+
+  const ref = db.collection("support").doc(ticketId);
+  const doc = await ref.get();
+  if (!doc.exists) return ctx.reply("❌ Тикет не найден.");
+
+  const t = doc.data();
+
+  try {
+    await ctx.telegram.sendMessage(
+      Number(t.userId),
+      `🛠 *Ответ техподдержки*\n\n${message}`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (e) {
+    return ctx.reply("❌ Не удалось отправить пользователю (возможно, он заблокировал бота).");
+  }
+
+  await ref.set({
+    adminReply: message,
+    repliedAt: Date.now(),
+    status: "CLOSED",
+    closedAt: Date.now(),
+    closedBy: String(ctx.from.id)
+  }, { merge: true });
+
+  return ctx.reply(`✅ Ответ отправлен, тикет ${ticketId} закрыт.`);
+});
+
+bot.command("support_open", async ctx => {
+  if (ctx.from.id !== OWNER_ID) return;
+
+  const snap = await db.collection("support")
+    .where("status", "==", "OPEN")
+    .orderBy("ts", "desc")
+    .limit(30)
+    .get();
+
+  if (snap.empty) {
+    return ctx.reply("✅ Активных обращений нет.");
+  }
+
+  let text = `🛠 *Активные обращения (OPEN):* \n\n`;
+
+  snap.forEach(doc => {
+    const t = doc.data();
+    const date = new Date(t.ts).toLocaleString("ru-RU");
+    text += `🎫 \`${doc.id}\`\n`;
+    text += `👤 ${t.name || "-"} • 🆔 ${t.userId}\n`;
+    text += `📅 ${date}\n`;
+    text += `✉️ ${t.text?.slice(0, 120) || ""}\n`;
+    text += `———\n`;
+  });
+
+  ctx.reply(text, { parse_mode: "Markdown" });
+});
+
+
 
 // ======================================================
 // /reset_lessons — сбросить уроки и начать с 1-го (только админ)
@@ -1184,18 +1291,27 @@ bot.on("text", async ctx => {
   if (u.supportMode) {
     await saveUser(userId, { supportMode: false });
 
-    await db.collection("support").add({
-      userId: String(userId),
-      name: u.name || "-",
-      text,
-      ts: Date.now()
-    });
+    const ref = await db.collection("support").add({
+  userId: String(userId),
+  name: u.name || "-",
+  text,
+  ts: Date.now(),
+  status: "OPEN",
+  closedAt: null,
+  closedBy: null,
+  adminReply: null
+});
 
-    await ctx.telegram.sendMessage(
-      OWNER_ID,
-      `🛠 *Техподдержка*\n\n👤 ${u.name}\n🆔 ${userId}\n\n✉️ ${text}`,
-      { parse_mode: "Markdown" }
-    );
+// админу отправляем сразу с ID тикета
+await ctx.telegram.sendMessage(
+  OWNER_ID,
+  `🛠 *Техподдержка*\n` +
+  `🎫 Ticket: \`${ref.id}\`\n\n` +
+  `👤 ${u.name || "Без имени"}\n` +
+  `🆔 ${userId}\n\n` +
+  `✉️ ${text}`,
+  { parse_mode: "Markdown" }
+);
 
     return ctx.reply("✅ Сообщение отправлено в техподдержку.");
   }
