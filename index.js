@@ -1155,8 +1155,8 @@ bot.on("text", async ctx => {
   }
 });
 
-const userId = ctx.from.id;
-  const text = ctx.message.text.trim();
+ // const userId = ctx.from.id;
+ // const text = ctx.message.text.trim();
 
   const u = usersCache[userId] || await loadUser(userId);
 
