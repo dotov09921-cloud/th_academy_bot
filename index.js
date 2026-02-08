@@ -1142,6 +1142,7 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
+  // 1️⃣ РЕГИСТРАЦИЯ — ИМЯ
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
@@ -1153,20 +1154,36 @@ bot.on("text", async ctx => {
       ]).resize()
     );
   }
-});
-
- // const userId = ctx.from.id;
- // const text = ctx.message.text.trim();
 
   const u = usersCache[userId] || await loadUser(userId);
+  if (!u) return;
 
-  // ======================================================
-  // ТЕХПОДДЕРЖКА — ПРИЁМ СООБЩЕНИЯ
-  // ======================================================
-  if (u?.supportMode) {
+  // 2️⃣ БИБЛИОТЕКА
+  if (u.readingLibrary) {
+    const lessonNumber = Number(text);
+
+    if (!lessonNumber || !lessons[lessonNumber]) {
+      return ctx.reply("❌ Введи корректный номер урока");
+    }
+
+    if (lessonNumber >= (u.currentLesson || 1)) {
+      return ctx.reply("⛔ Этот урок ещё не пройден");
+    }
+
+    await ctx.reply(
+      `📘 *Урок ${lessonNumber}*\n\n${lessons[lessonNumber].lessonText}`,
+      { parse_mode: "Markdown" }
+    );
+
+    u.readingLibrary = false;
+    await saveUser(userId, u);
+    return;
+  }
+
+  // 3️⃣ ТЕХПОДДЕРЖКА
+  if (u.supportMode) {
     await saveUser(userId, { supportMode: false });
 
-    // сохраняем сообщение
     await db.collection("support").add({
       userId: String(userId),
       name: u.name || "-",
@@ -1174,20 +1191,16 @@ bot.on("text", async ctx => {
       ts: Date.now()
     });
 
-    // отправляем админу
     await ctx.telegram.sendMessage(
       OWNER_ID,
-      `🛠 *Техподдержка*\n\n` +
-      `👤 ${u.name || "Без имени"}\n` +
-      `🆔 ${userId}\n\n` +
-      `✉️ ${text}`,
+      `🛠 *Техподдержка*\n\n👤 ${u.name}\n🆔 ${userId}\n\n✉️ ${text}`,
       { parse_mode: "Markdown" }
     );
 
-    await ctx.reply("✅ Сообщение отправлено в техподдержку.");
-
-    return; // ⛔ ОБЯЗАТЕЛЬНО
+    return ctx.reply("✅ Сообщение отправлено в техподдержку.");
   }
+
+});
 
 // ======================================================
 // РЕГИСТРАЦИЯ — телефон
