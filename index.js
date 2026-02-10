@@ -1678,33 +1678,33 @@ bot.on("callback_query", async ctx => {
 // АВТО-ОТПРАВКА УРОКОВ И ВОПРОСОВ ПО ТАЙМЕРАМ
 // ======================================================
 
-setInterval(async () => {
-  const now = Date.now();
+// setInterval(async () => {
+  //const now = Date.now();
 
-  const snapshot = await db.collection("users")
-    .where("finished", "==", false)
-    .get();
+  //const snapshot = await db.collection("users")
+    //.where("finished", "==", false)
+    //.get();
 
-  for (const doc of snapshot.docs) {
-    const userId = doc.id;
-    const u = doc.data();
+  //for (const doc of snapshot.docs) {
+    //const userId = doc.id;
+    //const u = doc.data();
 
-    if (!u.nextLessonAt && !u.nextQuestionAt) continue;
-    if (u.waitingExam) continue;
-    if (u.waitingAnswer) continue;
+    //if (!u.nextLessonAt && !u.nextQuestionAt) continue;
+   // if (u.waitingExam) continue;
+    //if (u.waitingAnswer) continue;
 
     // 1) сначала вопрос
-    if (u.nextQuestionAt && now >= u.nextQuestionAt) {
-      await sendQuestion(userId, u.currentLesson || 1);
-      continue;
-    }
+    //if (u.nextQuestionAt && now >= u.nextQuestionAt) {
+    //  await sendQuestion(userId, u.currentLesson || 1);
+   //   continue;
+  //  }
 
     // 2) потом урок
-    if (u.nextLessonAt && now >= u.nextLessonAt) {
-      await sendLesson(userId, u.currentLesson || 1);
-    }
-  }
-}, 20000);
+  //  if (u.nextLessonAt && now >= u.nextLessonAt) {
+   //   await sendLesson(userId, u.currentLesson || 1);
+    //}
+  //}
+//}, 20000);
 
 // ======================================================
 // ФИКСИРОВАННАЯ ОТПРАВКА ВОПРОСОВ В 12:12 МСК
@@ -1790,3 +1790,11 @@ if (WEBHOOK_URL) {
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
+process.on("unhandledRejection", err => {
+  console.error("🔥 UnhandledRejection:", err.message);
+});
+
+process.on("uncaughtException", err => {
+  console.error("🔥 UncaughtException:", err.message);
+});
