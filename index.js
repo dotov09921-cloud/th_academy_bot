@@ -1679,20 +1679,22 @@ bot.on("callback_query", async ctx => {
 // ======================================================
 
 setInterval(async () => {
-  const snapshot = await db.collection("users").get();
   const now = Date.now();
+
+  const snapshot = await db.collection("users")
+    .where("finished", "==", false)
+    .get();
 
   for (const doc of snapshot.docs) {
     const userId = doc.id;
     const u = doc.data();
 
-    if (u.finished) continue;
-
-    // если ждём ответ – ничего не шлём
+    if (!u.nextLessonAt && !u.nextQuestionAt) continue;
+    if (u.waitingExam) continue;
     if (u.waitingAnswer) continue;
 
-    // 1) сначала вопрос (важнее)
-     if (u.nextQuestionAt && now >= u.nextQuestionAt) {
+    // 1) сначала вопрос
+    if (u.nextQuestionAt && now >= u.nextQuestionAt) {
       await sendQuestion(userId, u.currentLesson || 1);
       continue;
     }
