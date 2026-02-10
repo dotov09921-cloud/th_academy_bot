@@ -243,8 +243,6 @@ async function sendLesson(userId, lessonNumber) {
     u.waitingAnswer = false;
     u.nextLessonAt = 0;
     u.nextQuestionAt = 0;
-    u.hasTimer = false;
-
     await saveUser(userId, u);
     return;
   }
@@ -274,8 +272,7 @@ async function sendLesson(userId, lessonNumber) {
   u.waitingAnswer = false;
   u.lastLessonAt = Date.now();
   u.nextLessonAt = 0;
- u.nextQuestionAt = Date.now() + 60 * 60 * 1000;
- u.hasTimer = true;
+  u.nextQuestionAt = Date.now() + 60 * 60 * 1000;
 
   await saveUser(userId, u);
 }
@@ -302,7 +299,6 @@ async function startExam(userId, lessonLimit) {
   u.examQuestions = ids;
   u.examIndex = 0;
   u.examScore = 0;
-  u.hasTimer = false;
 
   // отключаем обычные таймеры
   u.waitingAnswer = false;
@@ -375,7 +371,6 @@ async function sendQuestion(userId, lessonNumber) {
 
   u.waitingAnswer = true;
   u.nextQuestionAt = 0;
-  u.hasTimer = false;
 
   await saveUser(userId, u);
 }
@@ -1656,10 +1651,8 @@ bot.on("callback_query", async ctx => {
       await saveUser(userId, u);
       return; // останавливаем обычную логику, запускаем экзамен
     }
-     u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // следующий урок через 24 часа
-     u.nextQuestionAt = 0; // вопрос назначим после нового урока
-     u.hasTimer = true;
-     
+    u.nextLessonAt = Date.now() + 24 * 60 * 60 * 1000; // следующий урок через 24 часа
+    u.nextQuestionAt = 0; // вопрос назначим после нового урока
 
     await ctx.reply("✅ Правильно! Новый урок придёт через 24 часа.");
     await logProgress(userId, u, "OK");
@@ -1672,7 +1665,6 @@ bot.on("callback_query", async ctx => {
     // повтор этого же урока через 30 минут
     u.nextLessonAt = Date.now() + 30 * 60 * 1000;
     u.nextQuestionAt = 0;
-    u.hasTimer = true;
 
     await ctx.reply("❌ Ошибка. Балл снят. Через 30 минут повторим урок, потом придёт новый вопрос.");
     await logProgress(userId, u, "FAIL");
@@ -1745,11 +1737,7 @@ setInterval(async () => {
 
   console.log("📘 DAILY LESSON TRIGGER 12:12 MSK");
 
-  const snapshot = await db
-  .collection("users")
-  .where("hasTimer", "==", true)
-  .get();
-
+  const snapshot = await db.collection("users").get();
 
   for (const doc of snapshot.docs) {
     const userId = doc.id;
