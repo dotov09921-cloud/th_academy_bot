@@ -51,96 +51,9 @@ app.get("/ping", (req, res) => {
 const mainKeyboard = Markup.keyboard([
   ["▶️ Старт"],
   ["📚 Пройденные темы"],
-  ["🛠 Техподдержка"],
   ["Итог ⭐", "Рейтинг 🏆"],
   ["⏳ Осталось времени"]
 ]).resize();
-
-// ======================================================
-// ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ
-// ======================================================
-
-const USER_AGREEMENT_TEXT = `
-📄 Пользовательское соглашение
-Technocolor Academy
-
-Перед началом обучения, пожалуйста, ознакомьтесь с условиями использования бота.
-
-━━━━━━━━━━━━━━
-
-1️⃣ Общие положения
-
-Бот Technocolor Academy предназначен для обучения, проверки знаний и анализа прогресса пользователей.
-Использование бота является добровольным.
-
-━━━━━━━━━━━━━━
-
-2️⃣ Какие данные мы храним
-
-Для работы системы мы можем сохранять:
-
-• имя пользователя  
-• номер телефона  
-• Telegram ID  
-• выбранный статус (роль)  
-• прогресс обучения (уроки, вопросы, экзамены)  
-• количество правильных и неправильных ответов  
-• баллы и результаты экзаменов  
-• сообщения, отправленные в техподдержку  
-
-❗ Мы НЕ собираем:
-банковские данные, пароли, паспортную информацию или доступы к аккаунтам.
-
-━━━━━━━━━━━━━━
-
-3️⃣ Как используются данные
-
-Данные используются ТОЛЬКО для:
-
-• отправки уроков и вопросов  
-• проведения экзаменов  
-• подсчёта прогресса и статистики  
-• работы техподдержки  
-• улучшения качества обучения  
-
-Мы не передаём данные третьим лицам и не используем их для рекламы.
-
-━━━━━━━━━━━━━━
-
-4️⃣ Хранение и защита
-
-• данные хранятся в защищённой базе  
-• доступ есть только у администраторов системы  
-• принимаются разумные меры защиты информации  
-
-━━━━━━━━━━━━━━
-
-5️⃣ Ответственность
-
-Вся информация носит обучающий и рекомендательный характер.
-Администрация не несёт ответственности за практическое применение полученных знаний.
-
-━━━━━━━━━━━━━━
-
-6️⃣ Правила использования
-
-Запрещено:
-• вмешиваться в работу бота  
-• обходить логику обучения  
-• использовать бота в злоупотребляющих целях  
-
-При нарушениях доступ может быть ограничен.
-
-━━━━━━━━━━━━━━
-
-7️⃣ Техподдержка
-
-По любым вопросам вы можете написать в техподдержку через меню бота.
-
-━━━━━━━━━━━━━━
-
-Продолжая использование бота, вы подтверждаете согласие с условиями.
-`;
 
 // ======================================================
 // ВРЕМЕННЫЕ ХРАНИЛИЩА
@@ -395,21 +308,6 @@ async function resendCurrentQuestion(ctx, u) {
   );
 }
 
-async function showAgreement(ctx) {
-  await ctx.reply(
-    USER_AGREEMENT_TEXT,
-    {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "✅ Принять", callback_data: "agreement_accept" }],
-          [{ text: "❌ Отказаться", callback_data: "agreement_decline" }]
-        ]
-      }
-    }
-  );
-}
-
 // ======================================================
 // ОБРАБОТЧИК /start и кнопки "▶️ Старт"
 // ======================================================
@@ -419,11 +317,6 @@ async function handleStart(ctx) {
   const saved = await loadUser(userId);
 
   await ctx.reply("Меню:", mainKeyboard);
-
-  // ❗ Проверка пользовательского соглашения
-  if (!saved?.agreementAccepted) {
-    return showAgreement(ctx);
-  }
 
   // сброс режима библиотеки
   const cached = usersCache[userId] || saved || null;
@@ -458,17 +351,9 @@ async function handleStart(ctx) {
     return ctx.reply(`С возвращением, ${saved.name}! Продолжаем обучение 📚`);
   }
 
-// 4️⃣ Новая регистрация (шаг храним в Firestore)
-await db.collection("reg").doc(String(userId)).set({
-  step: "name",
-  ts: Date.now()
-}, { merge: true });
-
-// ✅ ВАЖНО: возвращаем tempUsers, т.к. текущая логика регистрации завязана на него
-tempUsers[userId] = { step: "name" };
-
-return ctx.reply("Привет! Напиши своё имя:");
-
+  // 4️⃣ Новая регистрация
+  tempUsers[userId] = { step: "name" };
+  ctx.reply("Привет! Напиши своё имя:");
 }
 
 bot.start(handleStart);
@@ -581,28 +466,6 @@ bot.hears("⏳ Осталось времени", async ctx => {
   }
 
   await ctx.reply(parts.join("\n\n"));
-});
-
-// ======================================================
-// ТЕХПОДДЕРЖКА — ВХОД
-// ======================================================
-
-bot.hears("🛠 Техподдержка", async ctx => {
-  const userId = ctx.from.id;
-  const u = usersCache[userId] || await loadUser(userId);
-
-  if (!u || !u.verified) {
-    return ctx.reply("Сначала нажми ▶️ Старт и пройди регистрацию.");
-  }
-
-  await saveUser(userId, { supportMode: true });
-
-  await ctx.reply(
-    "🛠 *Техподдержка*\n\n" +
-    "Опишите вашу проблему одним сообщением.\n" +
-    "Мы ответим вам в ближайшее время.",
-    { parse_mode: "Markdown" }
-  );
 });
 
 bot.hears("📚 Пройденные темы", async ctx => {
@@ -988,141 +851,6 @@ bot.command("pdf_full", async ctx => {
   }
 });
 
-bot.command("support_close", async ctx => {
-  if (ctx.from.id !== OWNER_ID) return;
-
-  const parts = ctx.message.text.split(" ");
-  const ticketId = parts[1];
-
-  if (!ticketId) {
-    return ctx.reply("Использование:\n/support_close TICKET_ID");
-  }
-
-  const ref = db.collection("support").doc(ticketId);
-  const doc = await ref.get();
-
-  if (!doc.exists) {
-    return ctx.reply("❌ Тикет не найден.");
-  }
-
-  const t = doc.data();
-  if (t.status === "CLOSED") {
-    return ctx.reply("ℹ️ Этот тикет уже закрыт.");
-  }
-
-  await ref.set({
-    status: "CLOSED",
-    closedAt: Date.now(),
-    closedBy: String(ctx.from.id)
-  }, { merge: true });
-
-  // можно уведомить пользователя
-  try {
-    await ctx.telegram.sendMessage(
-      Number(t.userId),
-      "✅ Ваше обращение в техподдержку закрыто. Если проблема актуальна — напишите снова через 🛠 Техподдержка."
-    );
-  } catch {}
-
-  return ctx.reply(`✅ Тикет ${ticketId} закрыт.`);
-});
-
-// ======================================================
-// /reply USER_ID текст — ответ пользователю
-// ======================================================
-
-bot.command("reply", async ctx => {
-  if (ctx.from.id !== OWNER_ID) return;
-
-  const parts = ctx.message.text.split(" ");
-  const targetId = parts[1];
-  const message = parts.slice(2).join(" ");
-
-  if (!targetId || !message) {
-    return ctx.reply("Использование:\n/reply USER_ID текст ответа");
-  }
-
-  try {
-    await ctx.telegram.sendMessage(
-      targetId,
-      `🛠 *Ответ техподдержки*\n\n${message}`,
-      { parse_mode: "Markdown" }
-    );
-
-    ctx.reply("✅ Ответ отправлен.");
-  } catch (err) {
-    ctx.reply("❌ Не удалось отправить сообщение пользователю.");
-  }
-});
-
-bot.command("support_reply", async ctx => {
-  if (ctx.from.id !== OWNER_ID) return;
-
-  const parts = ctx.message.text.split(" ");
-  const ticketId = parts[1];
-  const message = parts.slice(2).join(" ").trim();
-
-  if (!ticketId || !message) {
-    return ctx.reply("Использование:\n/support_reply TICKET_ID текст");
-  }
-
-  const ref = db.collection("support").doc(ticketId);
-  const doc = await ref.get();
-  if (!doc.exists) return ctx.reply("❌ Тикет не найден.");
-
-  const t = doc.data();
-
-  try {
-    await ctx.telegram.sendMessage(
-      Number(t.userId),
-      `🛠 *Ответ техподдержки*\n\n${message}`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (e) {
-    return ctx.reply("❌ Не удалось отправить пользователю (возможно, он заблокировал бота).");
-  }
-
-  await ref.set({
-    adminReply: message,
-    repliedAt: Date.now(),
-    status: "CLOSED",
-    closedAt: Date.now(),
-    closedBy: String(ctx.from.id)
-  }, { merge: true });
-
-  return ctx.reply(`✅ Ответ отправлен, тикет ${ticketId} закрыт.`);
-});
-
-bot.command("support_open", async ctx => {
-  if (ctx.from.id !== OWNER_ID) return;
-
-  const snap = await db.collection("support")
-    .where("status", "==", "OPEN")
-    .orderBy("ts", "desc")
-    .limit(30)
-    .get();
-
-  if (snap.empty) {
-    return ctx.reply("✅ Активных обращений нет.");
-  }
-
-  let text = `🛠 *Активные обращения (OPEN):* \n\n`;
-
-  snap.forEach(doc => {
-    const t = doc.data();
-    const date = new Date(t.ts).toLocaleString("ru-RU");
-    text += `🎫 \`${doc.id}\`\n`;
-    text += `👤 ${t.name || "-"} • 🆔 ${t.userId}\n`;
-    text += `📅 ${date}\n`;
-    text += `✉️ ${t.text?.slice(0, 120) || ""}\n`;
-    text += `———\n`;
-  });
-
-  ctx.reply(text, { parse_mode: "Markdown" });
-});
-
-
-
 // ======================================================
 // /reset_lessons — сбросить уроки и начать с 1-го (только админ)
 // ======================================================
@@ -1308,30 +1036,24 @@ bot.command("set_lesson", async ctx => {
 // БИБЛИОТЕКА ПРОЙДЕННЫХ УРОКОВ — ввод номера урока
 // ======================================================
 
-// ======================================================
-// БИБЛИОТЕКА ПРОЙДЕННЫХ УРОКОВ — ввод номера урока
-// ======================================================
-
-bot.on("text", async (ctx, next) => {
+bot.on("text", async ctx => {
   const userId = ctx.from.id;
-  const text = (ctx.message.text || "").trim();
+  const text = ctx.message.text.trim();
 
   const u = usersCache[userId] || await loadUser(userId);
 
-  // ✅ если не в режиме библиотеки — пропускаем дальше (чтобы работала регистрация и остальная логика)
-  if (!u?.readingLibrary) return next();
+  // если не в режиме библиотеки — не мешаем остальной логике
+  if (!u?.readingLibrary) return;
 
   const lessonNumber = Number(text);
 
   if (!lessonNumber || !lessons[lessonNumber]) {
-    await ctx.reply("❌ Введи корректный номер урока");
-    return; // остаёмся в режиме библиотеки
+    return ctx.reply("❌ Введи корректный номер урока");
   }
 
   // урок считается пройденным, если он меньше текущего
   if (lessonNumber >= (u.currentLesson || 1)) {
-    await ctx.reply("⛔ Этот урок ещё не пройден");
-    return; // остаёмся в режиме библиотеки
+    return ctx.reply("⛔ Этот урок ещё не пройден");
   }
 
   // отправляем полный текст
@@ -1343,8 +1065,6 @@ bot.on("text", async (ctx, next) => {
   // выключаем режим библиотеки
   u.readingLibrary = false;
   await saveUser(userId, u);
-
-  return; // не идём в регистрацию
 });
 
 // ======================================================
@@ -1355,7 +1075,6 @@ bot.on("text", async ctx => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  // 1️⃣ РЕГИСТРАЦИЯ — ИМЯ
   if (tempUsers[userId]?.step === "name") {
     tempUsers[userId].name = text;
     tempUsers[userId].step = "phone";
@@ -1367,61 +1086,6 @@ bot.on("text", async ctx => {
       ]).resize()
     );
   }
-
-  const u = usersCache[userId] || await loadUser(userId);
-  if (!u) return;
-
-  // 2️⃣ БИБЛИОТЕКА
-  if (u.readingLibrary) {
-    const lessonNumber = Number(text);
-
-    if (!lessonNumber || !lessons[lessonNumber]) {
-      return ctx.reply("❌ Введи корректный номер урока");
-    }
-
-    if (lessonNumber >= (u.currentLesson || 1)) {
-      return ctx.reply("⛔ Этот урок ещё не пройден");
-    }
-
-    await ctx.reply(
-      `📘 *Урок ${lessonNumber}*\n\n${lessons[lessonNumber].lessonText}`,
-      { parse_mode: "Markdown" }
-    );
-
-    u.readingLibrary = false;
-    await saveUser(userId, u);
-    return;
-  }
-
-  // 3️⃣ ТЕХПОДДЕРЖКА
-  if (u.supportMode) {
-    await saveUser(userId, { supportMode: false });
-
-    const ref = await db.collection("support").add({
-  userId: String(userId),
-  name: u.name || "-",
-  text,
-  ts: Date.now(),
-  status: "OPEN",
-  closedAt: null,
-  closedBy: null,
-  adminReply: null
-});
-
-// админу отправляем сразу с ID тикета
-await ctx.telegram.sendMessage(
-  OWNER_ID,
-  `🛠 *Техподдержка*\n` +
-  `🎫 Ticket: \`${ref.id}\`\n\n` +
-  `👤 ${u.name || "Без имени"}\n` +
-  `🆔 ${userId}\n\n` +
-  `✉️ ${text}`,
-  { parse_mode: "Markdown" }
-);
-
-    return ctx.reply("✅ Сообщение отправлено в техподдержку.");
-  }
-
 });
 
 // ======================================================
@@ -1524,36 +1188,6 @@ bot.action("role_client", async ctx => {
 
   await ctx.reply("Статус сохранён: 🧑 Клиент");
   return sendLesson(userId, u.currentLesson || 1);
-});
-
-// ======================================================
-// ПРИНЯТИЕ ПОЛЬЗОВАТЕЛЬСКОГО СОГЛАШЕНИЯ
-// ======================================================
-
-bot.action("agreement_accept", async ctx => {
-  const userId = ctx.from.id;
-
-  await saveUser(userId, {
-    agreementAccepted: true,
-    agreementAcceptedAt: Date.now()
-  });
-
-  try {
-    await ctx.editMessageReplyMarkup(); // убираем кнопки
-  } catch {}
-
-  await ctx.reply("✅ Соглашение принято. Добро пожаловать!");
-
-  // повторно запускаем старт
-  return handleStart(ctx);
-});
-
-bot.action("agreement_decline", async ctx => {
-  await ctx.answerCbQuery();
-
-  await ctx.reply(
-    "❌ Без принятия пользовательского соглашения использование бота невозможно.\n\nНажмите ▶️ Старт, если передумаете."
-  );
 });
 
 // ======================================================
@@ -1679,22 +1313,20 @@ bot.on("callback_query", async ctx => {
 // ======================================================
 
 setInterval(async () => {
+  const snapshot = await db.collection("users").get();
   const now = Date.now();
-
-  const snapshot = await db.collection("users")
-    .where("finished", "==", false)
-    .get();
 
   for (const doc of snapshot.docs) {
     const userId = doc.id;
     const u = doc.data();
 
-    if (!u.nextLessonAt && !u.nextQuestionAt) continue;
-    if (u.waitingExam) continue;
+    if (u.finished) continue;
+
+    // если ждём ответ – ничего не шлём
     if (u.waitingAnswer) continue;
 
-    // 1) сначала вопрос
-    if (u.nextQuestionAt && now >= u.nextQuestionAt) {
+    // 1) сначала вопрос (важнее)
+     if (u.nextQuestionAt && now >= u.nextQuestionAt) {
       await sendQuestion(userId, u.currentLesson || 1);
       continue;
     }
