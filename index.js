@@ -557,6 +557,11 @@ bot.command("progress_report", async ctx => {
 
     const filePath = path.join(__dirname, `progress_report_${Date.now()}.pdf`);
     const doc = new PDFDocument({ margin: 40 });
+    const { pdfmetrics } = require('pdfkit');
+   const { UnicodeCIDFont } = require('pdfkit');
+
+pdfmetrics.registerFont(UnicodeCIDFont('HYSMyeongJo-Medium'));
+doc.font('HYSMyeongJo-Medium');
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
