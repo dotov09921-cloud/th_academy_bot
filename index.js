@@ -556,12 +556,13 @@ bot.command("progress_report", async ctx => {
     await ctx.reply("⏳ Формирую расширенный отчёт...");
 
     const filePath = path.join(__dirname, `progress_report_${Date.now()}.pdf`);
-    const doc = new PDFDocument({ margin: 40 });
-    const { pdfmetrics } = require('pdfkit');
-   const { UnicodeCIDFont } = require('pdfkit');
+    const doc = new PDFDocument({ margin: 50 });
 
-pdfmetrics.registerFont(UnicodeCIDFont('HYSMyeongJo-Medium'));
-doc.font('HYSMyeongJo-Medium');
+// ✅ подключаем шрифт с кириллицей
+const fontPath = path.join(__dirname, "fonts", "DejaVuSans.ttf");
+doc.registerFont("DejaVu", fontPath);
+doc.font("DejaVu");
+doc.fontSize(12);
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
@@ -851,6 +852,13 @@ async function buildFullReport30Days(filePath) {
       const accuracy = total === 0 ? 0 : Math.round((totalCorrect / total) * 100);
 
       const doc = new PDFDocument({ margin: 50 });
+
+// ✅ подключаем шрифт с кириллицей
+const fontPath = path.join(__dirname, "fonts", "DejaVuSans.ttf");
+doc.registerFont("DejaVu", fontPath);
+doc.font("DejaVu");
+doc.fontSize(12);
+
       const stream = fs.createWriteStream(filePath);
       doc.pipe(stream);
 
