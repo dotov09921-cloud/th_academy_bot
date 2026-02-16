@@ -547,6 +547,86 @@ bot.command("news", async ctx => {
   ctx.reply(`✔ Новость отправлена: ${sent} пользователям.`);
 });
 
+bot.command("progress_report", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ Нет доступа.");
+  }
+
+  try {
+    await ctx.reply("⏳ Формирую расширенный отчёт...");
+
+    const filePath = path.join(__dirname, `progress_report_${Date.now()}.pdf`);
+    const doc = new PDFDocument({ margin: 40 });
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+
+    const snapshot = await db.collection("users").get();
+    const TOTAL_LESSONS = 90;
+
+    doc.fontSize(20).text("Technocolor Academy", { align: "center" });
+    doc.moveDown();
+    doc.fontSize(16).text("Расширенный отчёт по обучению", { align: "center" });
+    doc.moveDown(2);
+
+    for (const userDoc of snapshot.docs) {
+      const u = userDoc.data();
+
+      const currentLesson = u.currentLesson || 1;
+      const progressPercent = Math.round(((currentLesson - 1) / TOTAL_LESSONS) * 100);
+
+      const correct = u.correctCount || 0;
+      const wrong = u.wrongCount || 0;
+      const totalAnswers = correct + wrong;
+      const accuracy = totalAnswers === 0 ? 0 : Math.round((correct / totalAnswers) * 100);
+
+      // ===== ЭКЗАМЕНЫ =====
+      const exams = u.examHistory || [];
+      const examsCount = exams.length;
+
+      let avgExam = 0;
+      let bestExam = 0;
+      let worstExam = 100;
+
+      if (examsCount > 0) {
+        const sum = exams.reduce((acc, e) => acc + e.percent, 0);
+        avgExam = Math.round(sum / examsCount);
+        bestExam = Math.max(...exams.map(e => e.percent));
+        worstExam = Math.min(...exams.map(e => e.percent));
+      }
+
+      doc.fontSize(12).text(`Имя: ${u.name || "-"}`);
+      doc.text(`Телефон: ${u.phone || "-"}`);
+      doc.text(`Роль: ${u.role || "-"}`);
+      doc.text(`Пройдено: ${currentLesson - 1} / ${TOTAL_LESSONS} (${progressPercent}%)`);
+      doc.text(`Баллы: ${u.points || 0}`);
+      doc.text(`Точность ответов: ${accuracy}%`);
+      doc.text(`Статус: ${u.finished ? "Завершил" : "Обучается"}`);
+
+      doc.moveDown(0.5);
+      doc.text(`🎓 Экзамены: ${examsCount}`);
+      doc.text(`Средний результат: ${avgExam}%`);
+      doc.text(`Лучший результат: ${bestExam}%`);
+      doc.text(`Худший результат: ${examsCount > 0 ? worstExam : 0}%`);
+
+      doc.moveDown(1.5);
+    }
+
+    doc.end();
+
+    stream.on("finish", async () => {
+      await ctx.replyWithDocument({
+        source: filePath,
+        filename: "progress_report_full.pdf"
+      });
+      fs.unlinkSync(filePath);
+    });
+
+  } catch (err) {
+    console.error(err);
+    ctx.reply("❌ Ошибка при формировании отчёта.");
+  }
+});
+
 // ======================================================
 // /mistakes [userId] — ошибки пользователя (только админ)
 // ======================================================
@@ -1227,14 +1307,27 @@ bot.on("callback_query", async ctx => {
 
     // Экзамен завершен
     if (u.examIndex >= u.examQuestions.length) {
-      const score = u.examScore;
+  const score = u.examScore;
 
-      u.waitingExam = false;
-      u.lastExamLesson = lessonId;
+  u.waitingExam = false;
+  u.lastExamLesson = lessonId;
 
-      await ctx.reply(
-        `🎓 Экзамен завершен!\nРезультат: ${score} из 10 баллов.`
-      );
+  // ✅ сохраняем историю экзаменов
+  if (!Array.isArray(u.examHistory)) {
+    u.examHistory = [];
+  }
+
+  u.examHistory.push({
+    lessonRange: `${lessonId - 24}-${lessonId}`,
+    score: score,
+    total: 10,
+    percent: Math.round((score / 10) * 100),
+    ts: Date.now()
+  });
+
+  await ctx.reply(
+    `🎓 Экзамен завершен!\nРезультат: ${score} из 10 баллов.`
+  );
 
       // Возобновляем обычные уроки
       u.nextLessonAt = Date.now() + 3000;
