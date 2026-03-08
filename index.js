@@ -62,6 +62,7 @@ const mainKeyboard = Markup.keyboard([
 const tempUsers = {};
 const usersCache = {};
 const tempVideoUpload = {}; // сюда бот временно запоминает, к какому уроку загружается видео
+const tempImageUpload = {}; // сюда бот запоминает, к какому уроку загружается фото
 
 // 🔐 ID админа
 const OWNER_ID = 8097671685;
@@ -146,7 +147,9 @@ async function sendLesson(userId, lessonNumber) {
 
   // пробуем получить видео из Firestore
   const firestoreLesson = await db.collection("lessons").doc(String(lessonNumber)).get();
-  const videoId = firestoreLesson.exists ? firestoreLesson.data().video : null;
+const lessonMedia = firestoreLesson.exists ? firestoreLesson.data() : {};
+const videoId = lessonMedia.video || null;
+const imageId = lessonMedia.image || null;
 
   if (!lesson) {
     await bot.telegram.sendMessage(chatId, "🎉 Все 90 уроков пройдены! Молодец!");
@@ -160,29 +163,39 @@ async function sendLesson(userId, lessonNumber) {
     return;
   }
 
-  let sentLesson;
+ let sentLesson;
+let sentImage = null;
 
-  if (videoId) {
-    // 🎬 если есть видео — отправляем видео
-    sentLesson = await bot.telegram.sendVideo(
-      chatId,
-      videoId,
-      {
-        caption: `📘 Урок ${lessonNumber}\n\n${lesson.lessonText || ""}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
-      }
-    );
-  } else {
-    // 📄 если видео нет — отправляем текст, как раньше
-    sentLesson = await bot.telegram.sendMessage(
-      chatId,
-      `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
-    );
-  }
+if (videoId) {
+  // 🎬 если есть видео — отправляем видео
+  sentLesson = await bot.telegram.sendVideo(
+    chatId,
+    videoId,
+    {
+      caption: `📘 Урок ${lessonNumber}\n\n${lesson.lessonText || ""}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+    }
+  );
+} else if (imageId) {
+  // 🖼 если есть фото — сначала фото, потом текст
+  sentImage = await bot.telegram.sendPhoto(chatId, imageId);
+
+  sentLesson = await bot.telegram.sendMessage(
+    chatId,
+    `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+  );
+} else {
+  // 📄 если нет медиа — отправляем текст
+  sentLesson = await bot.telegram.sendMessage(
+    chatId,
+    `📘 Урок ${lessonNumber}\n\n${lesson.lessonText}\n\n⏳ Через 1 час придёт вопрос по этой теме.`
+  );
+}
 
   const u = (usersCache[userId] || await loadUser(userId)) || {};
   u.currentLesson = lessonNumber;
-  u.lastLessonMessageId = sentLesson.message_id;
-  u.waitingAnswer = false;
+u.lastLessonMessageIds = sentImage
+  ? [sentImage.message_id, sentLesson.message_id]
+  : [sentLesson.message_id];  u.waitingAnswer = false;
   u.lastLessonAt = Date.now();
   u.nextLessonAt = 0;
   u.nextQuestionAt = Date.now() + 60 * 60 * 1000;
@@ -263,14 +276,16 @@ async function sendQuestion(userId, lessonNumber) {
   if (!lesson) return;
 
   // Удаляем учебный материал, если он ещё висит
-  if (u.lastLessonMessageId) {
+  if (Array.isArray(u.lastLessonMessageIds)) {
+  for (const messageId of u.lastLessonMessageIds) {
     try {
-      await bot.telegram.deleteMessage(chatId, u.lastLessonMessageId);
+      await bot.telegram.deleteMessage(chatId, messageId);
     } catch (e) {
       console.log("⚠️ Не удалось удалить сообщение с уроком:", e.message);
     }
-    u.lastLessonMessageId = null;
   }
+  u.lastLessonMessageIds = [];
+}
 
   const keyboard = Markup.inlineKeyboard(
     lesson.buttons.map(b => [Markup.button.callback(b[0], b[0])])
@@ -631,6 +646,66 @@ doc.fontSize(12);
     console.error(err);
     ctx.reply("❌ Ошибка при формировании отчёта.");
   }
+});
+
+// ======================================================
+// /reset_all_users — полный сброс обучения (только админ)
+// ======================================================
+
+bot.command("reset_all_users", async ctx => {
+
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ Нет доступа.");
+  }
+
+  try {
+
+    const snapshot = await db.collection("users").get();
+    let count = 0;
+
+    for (const doc of snapshot.docs) {
+
+      const userId = doc.id;
+
+      await db.collection("users").doc(userId).update({
+
+        currentLesson: 1,
+        finished: false,
+
+        waitingAnswer: false,
+        waitingExam: false,
+
+        examQuestions: [],
+        examIndex: 0,
+        examScore: 0,
+
+        nextLessonAt: 0,
+        nextQuestionAt: 0,
+
+        lastLessonMessageIds: [],
+        lastLessonMessageIds: [],
+
+        streak: 0,
+        points: 0,
+
+        correctCount: 0,
+        wrongCount: 0
+
+      });
+
+      count++;
+
+    }
+
+    ctx.reply(`✅ Все пользователи обнулены.\nКоличество: ${count}`);
+
+  } catch (err) {
+
+    console.error("Ошибка reset_all_users:", err);
+    ctx.reply("❌ Ошибка сброса пользователей.");
+
+  }
+
 });
 
 // ======================================================
@@ -1070,6 +1145,29 @@ bot.command("addvideo", async ctx => {
 });
 
 // ======================================================
+// /addimage — добавить фото к уроку (только админ)
+// ======================================================
+bot.command("addimage", async ctx => {
+  if (ctx.from.id !== OWNER_ID) {
+    return ctx.reply("❌ У вас нет прав загружать фото.");
+  }
+
+  const args = ctx.message.text.split(" ").slice(1);
+  if (!args[0]) {
+    return ctx.reply("Использование: /addimage 21");
+  }
+
+  const lessonNumber = Number(args[0]);
+  if (isNaN(lessonNumber)) {
+    return ctx.reply("❌ Неверный номер урока. Пример: /addimage 21");
+  }
+
+  tempImageUpload[ctx.from.id] = { lesson: lessonNumber };
+
+  return ctx.reply(`🖼 Теперь отправьте фото для урока ${lessonNumber}`);
+});
+
+// ======================================================
 // Приём видео от админа для урока
 // ======================================================
 bot.on("video", async ctx => {
@@ -1091,6 +1189,33 @@ bot.on("video", async ctx => {
   delete tempVideoUpload[userId];
 
   await ctx.reply(`✔ Видео сохранено для урока ${lessonNumber}`);
+});
+
+// ======================================================
+// Приём фото от админа для урока
+// ======================================================
+bot.on("photo", async ctx => {
+  const userId = ctx.from.id;
+
+  // бот ждёт фото?
+  if (!tempImageUpload[userId]) return;
+
+  const lessonNumber = tempImageUpload[userId].lesson;
+
+  // берём самое большое фото из массива
+  const photo = ctx.message.photo[ctx.message.photo.length - 1];
+  const fileId = photo.file_id;
+
+  // сохраняем в Firestore
+  await db.collection("lessons").doc(String(lessonNumber)).set(
+    { image: fileId },
+    { merge: true }
+  );
+
+  // очищаем состояние
+  delete tempImageUpload[userId];
+
+  await ctx.reply(`✔ Фото сохранено для урока ${lessonNumber}`);
 });
 
 // ======================================================
