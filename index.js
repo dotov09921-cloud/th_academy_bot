@@ -1653,8 +1653,8 @@ setInterval(async () => {
 
 if (WEBHOOK_URL) {
 
-  await bot.telegram.deleteWebhook().catch(() => {});
-  await bot.telegram.setWebhook(`${WEBHOOK_URL}/telegram-webhook`);
+   bot.telegram.deleteWebhook().catch(() => {});
+   bot.telegram.setWebhook(`${WEBHOOK_URL}/telegram-webhook`);
 
   app.use(bot.webhookCallback("/telegram-webhook"));
 
