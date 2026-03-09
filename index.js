@@ -1652,22 +1652,27 @@ setInterval(async () => {
 // ======================================================
 
 if (WEBHOOK_URL) {
-  bot.telegram.setWebhook(WEBHOOK_URL);
+
+  await bot.telegram.deleteWebhook().catch(() => {});
+  await bot.telegram.setWebhook(`${WEBHOOK_URL}/telegram-webhook`);
+
   app.use(bot.webhookCallback("/telegram-webhook"));
-  app.listen(PORT, () => console.log("Server OK:", PORT));
+
+  app.listen(PORT, () => {
+    console.log("✅ WEBHOOK MODE:", PORT);
+  });
+
 } else {
+
   bot.launch();
-  console.log("▶️ Запуск POLLING");
+  console.log("▶️ POLLING MODE");
+
 }
 
 process.once("SIGINT", () => {
-  if (bot.isPolling()) {
-    bot.stop("SIGINT");
-  }
+  if (bot.isPolling()) bot.stop("SIGINT");
 });
 
 process.once("SIGTERM", () => {
-  if (bot.isPolling()) {
-    bot.stop("SIGTERM");
-  }
+  if (bot.isPolling()) bot.stop("SIGTERM");
 });
