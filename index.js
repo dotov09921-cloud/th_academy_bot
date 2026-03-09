@@ -1661,9 +1661,13 @@ if (WEBHOOK_URL) {
 }
 
 process.once("SIGINT", () => {
-  try { bot.stop("SIGINT"); } catch(e) {}
+  if (bot.isPolling()) {
+    bot.stop("SIGINT");
+  }
 });
 
 process.once("SIGTERM", () => {
-  try { bot.stop("SIGTERM"); } catch(e) {}
+  if (bot.isPolling()) {
+    bot.stop("SIGTERM");
+  }
 });
