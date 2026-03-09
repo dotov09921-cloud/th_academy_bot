@@ -683,7 +683,6 @@ bot.command("reset_all_users", async ctx => {
         nextQuestionAt: 0,
 
         lastLessonMessageIds: [],
-        lastLessonMessageIds: [],
 
         streak: 0,
         points: 0,
@@ -1254,18 +1253,22 @@ bot.command("set_lesson", async ctx => {
 // БИБЛИОТЕКА ПРОЙДЕННЫХ УРОКОВ — ввод номера урока
 // ======================================================
 
-bot.on("text", async ctx => {
+bot.on("text", async (ctx, next) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
   const u = usersCache[userId] || await loadUser(userId);
-console.log("REG CHECK:", {
-  userId,
-  text,
-  tempUser: tempUsers[userId] || null
-});
-  // если не в режиме библиотеки — не мешаем остальной логике
-  if (!u?.readingLibrary) return;
+
+  console.log("REG CHECK:", {
+    userId,
+    text,
+    tempUser: tempUsers[userId] || null
+  });
+
+  // если не библиотека — передаём дальше
+  if (!u?.readingLibrary) {
+    return next();
+  }
 
   const lessonNumber = Number(text);
 
@@ -1273,18 +1276,15 @@ console.log("REG CHECK:", {
     return ctx.reply("❌ Введи корректный номер урока");
   }
 
-  // урок считается пройденным, если он меньше текущего
   if (lessonNumber >= (u.currentLesson || 1)) {
     return ctx.reply("⛔ Этот урок ещё не пройден");
   }
 
-  // отправляем полный текст
   await ctx.reply(
     `📘 *Урок ${lessonNumber}*\n\n${lessons[lessonNumber].lessonText}`,
     { parse_mode: "Markdown" }
   );
 
-  // выключаем режим библиотеки
   u.readingLibrary = false;
   await saveUser(userId, u);
 });
@@ -1321,11 +1321,8 @@ bot.on("contact", async ctx => {
 
 const phone = ctx.message.contact.phone_number;
 
-const regDoc = await db.collection("reg").doc(String(userId)).get();
-const regData = regDoc.exists ? regDoc.data() : {};
-
 const tmp = tempUsers[userId] || {};
-const name = regData.name || tmp.name || ctx.from.first_name || "Без имени";
+const name = tmp.name || ctx.from.first_name || "Без имени";
 
   const userState = {
     name,
@@ -1341,7 +1338,7 @@ const name = regData.name || tmp.name || ctx.from.first_name || "Без имен
     role: null,
     correctCount: 0,
     wrongCount: 0,
-    lastLessonMessageId: null,
+    lastLessonMessageIds: [],
     lastExamLesson: 0,
     waitingExam: false,
     examQuestions: [],
@@ -1353,7 +1350,6 @@ const name = regData.name || tmp.name || ctx.from.first_name || "Без имен
   usersCache[userId] = userState;
 
   delete tempUsers[userId];
-  await db.collection("reg").doc(String(userId)).delete().catch(() => {});
 
   await ctx.reply("Номер сохранён ✅", {
     reply_markup: { remove_keyboard: true }
