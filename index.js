@@ -1259,7 +1259,11 @@ bot.on("text", async ctx => {
   const text = ctx.message.text.trim();
 
   const u = usersCache[userId] || await loadUser(userId);
-
+console.log("REG CHECK:", {
+  userId,
+  text,
+  tempUser: tempUsers[userId] || null
+});
   // если не в режиме библиотеки — не мешаем остальной логике
   if (!u?.readingLibrary) return;
 
@@ -1315,9 +1319,13 @@ bot.on("contact", async ctx => {
 
   if (tempUsers[userId]?.step !== "phone") return;
 
-  const phone = ctx.message.contact.phone_number;
-  const tmp = tempUsers[userId] || {};
-  const name = tmp.name || ctx.from.first_name || "Без имени";
+const phone = ctx.message.contact.phone_number;
+
+const regDoc = await db.collection("reg").doc(String(userId)).get();
+const regData = regDoc.exists ? regDoc.data() : {};
+
+const tmp = tempUsers[userId] || {};
+const name = regData.name || tmp.name || ctx.from.first_name || "Без имени";
 
   const userState = {
     name,
@@ -1345,6 +1353,7 @@ bot.on("contact", async ctx => {
   usersCache[userId] = userState;
 
   delete tempUsers[userId];
+  await db.collection("reg").doc(String(userId)).delete().catch(() => {});
 
   await ctx.reply("Номер сохранён ✅", {
     reply_markup: { remove_keyboard: true }
