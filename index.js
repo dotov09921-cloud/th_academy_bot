@@ -683,6 +683,7 @@ bot.command("reset_all_users", async ctx => {
         nextQuestionAt: 0,
 
         lastLessonMessageIds: [],
+        lastLessonMessageIds: [],
 
         streak: 0,
         points: 0,
@@ -1319,10 +1320,9 @@ bot.on("contact", async ctx => {
 
   if (tempUsers[userId]?.step !== "phone") return;
 
-const phone = ctx.message.contact.phone_number;
-
-const tmp = tempUsers[userId] || {};
-const name = tmp.name || ctx.from.first_name || "Без имени";
+  const phone = ctx.message.contact.phone_number;
+  const tmp = tempUsers[userId] || {};
+  const name = tmp.name || ctx.from.first_name || "Без имени";
 
   const userState = {
     name,
@@ -1338,7 +1338,7 @@ const name = tmp.name || ctx.from.first_name || "Без имени";
     role: null,
     correctCount: 0,
     wrongCount: 0,
-    lastLessonMessageIds: [],
+    lastLessonMessageId: null,
     lastExamLesson: 0,
     waitingExam: false,
     examQuestions: [],
@@ -1648,27 +1648,13 @@ setInterval(async () => {
 // ======================================================
 
 if (WEBHOOK_URL) {
-
-   bot.telegram.deleteWebhook().catch(() => {});
-   bot.telegram.setWebhook(`${WEBHOOK_URL}/telegram-webhook`);
-
+  bot.telegram.setWebhook(WEBHOOK_URL);
   app.use(bot.webhookCallback("/telegram-webhook"));
-
-  app.listen(PORT, () => {
-    console.log("✅ WEBHOOK MODE:", PORT);
-  });
-
+  app.listen(PORT, () => console.log("Server OK:", PORT));
 } else {
-
   bot.launch();
-  console.log("▶️ POLLING MODE");
-
+  console.log("▶️ Запуск POLLING");
 }
 
-process.once("SIGINT", () => {
-  if (bot.isPolling()) bot.stop("SIGINT");
-});
-
-process.once("SIGTERM", () => {
-  if (bot.isPolling()) bot.stop("SIGTERM");
-});
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
